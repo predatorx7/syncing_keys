@@ -1,0 +1,42 @@
+name: syncing_keys
+description: "SyncingKeys SDK — set-and-forget secure key management & cross-device sync for Starknet/Ethereum Flutter apps."
+version: 0.1.0
+homepage: https://github.com/everydayapp-xyz/syncing_keys
+
+environment:
+  sdk: ^3.11.5
+  flutter: '>=3.13.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  plugin_platform_interface: ^2.0.2
+
+  # Cryptography — pointycastle covers PBKDF2-HMAC-SHA256, AES-GCM, secp256k1,
+  # SHA-256/HMAC, and big-int curve math (we use this for STARK curve math too).
+  pointycastle: ^3.9.1
+
+  # Hex/base64 helpers + extra crypto primitives.
+  convert: ^3.1.1
+  crypto: ^3.0.5
+
+  # Mnemonic + BIP-32 HD derivation (used by the Ethereum generator).
+  bip39: ^1.0.6
+  bip32: ^2.0.0
+
+  # Biometric "unlock PIN" pre-gate on devices that support it.
+  local_auth: ^2.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: app.xyz.everydayapp.syncing_keys
+        pluginClass: SyncingKeysPlugin
+      ios:
+        pluginClass: SyncingKeysPlugin

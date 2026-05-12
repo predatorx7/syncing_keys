@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    SyncingKeys SDK privacy manifest
+    ================================
+    Audited 2026-05-12. The SDK does NOT use any of Apple's "required reason
+    APIs" — see https://developer.apple.com/documentation/bundleresources/privacy_manifest_files/describing_use_of_required_reason_api
+    for the canonical list. Concretely:
+
+      • Security.framework (SecItemAdd/Get/Update/Delete, SecKeyXxx) — not on
+        the required-reason list.
+      • LocalAuthentication.framework (LAContext, BiometricPrompt) — not on
+        the list.
+      • Foundation.FileManager.ubiquityIdentityToken — not on the list (only
+        the file-attributes APIs around modification/access time are
+        required-reason-gated).
+      • UIDevice.current.systemVersion — not on the list.
+
+    No collected data types are declared because the SDK only reads / writes
+    opaque encrypted envelopes that it generates locally; it never observes
+    or transmits user-identifying or device-identifying data on the wire.
+
+    Update this comment block whenever you audit. The file itself stays
+    minimal (empty arrays) because that is what App Store reviewers expect
+    for a no-collection SDK.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyTracking</key>
+	<false/>
+</dict>
+</plist>
