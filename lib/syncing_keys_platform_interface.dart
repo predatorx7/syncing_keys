@@ -23,7 +23,6 @@ abstract class SyncingKeysPlatform extends PlatformInterface {
   /// guarantees this is called before any CRUD.
   Future<void> configure({
     String? iosKeychainGroup,
-    String? androidDriveClientId,
     required bool syncEnabled,
   });
 

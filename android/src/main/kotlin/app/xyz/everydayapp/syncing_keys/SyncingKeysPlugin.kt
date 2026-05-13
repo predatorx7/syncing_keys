@@ -49,7 +49,6 @@ class SyncingKeysPlugin :
     private lateinit var appContext: Context
 
     private var keychainGroup: String? = null
-    private var driveClientId: String? = null
     private var syncEnabled: Boolean = false
 
     private var activity: Activity? = null
@@ -127,9 +126,11 @@ class SyncingKeysPlugin :
     }
 
     private fun rebuildDrive() {
-        val id = driveClientId
         val act = activity
-        drive = if (id != null && act != null) GoogleDriveBackup(act, id) else null
+        // Drive's `Identity.getAuthorizationClient` resolves the OAuth client
+        // implicitly via the running APK's package + cert SHA-1 against the
+        // entries in google-services.json — no client ID needed in code.
+        drive = if (act != null) GoogleDriveBackup(act) else null
     }
 
     /**
@@ -196,7 +197,6 @@ class SyncingKeysPlugin :
 
     private fun handleConfigure(call: MethodCall, result: MethodChannel.Result) {
         keychainGroup  = call.argument<String>("iosKeychainGroup")
-        driveClientId  = call.argument<String>("androidDriveClientId")
         syncEnabled    = call.argument<Boolean>("syncEnabled") ?: false
         rebuildDrive()
         result.success(null)
@@ -220,8 +220,10 @@ class SyncingKeysPlugin :
             result.error("NO_ACTIVITY", "Plugin is not attached to an Activity.", null); return
         }
         if (d == null) {
-            result.error("NO_CLIENT_ID",
-                "androidDriveClientId is null — pass it via GlobalConfig.",
+            // Activity not attached yet — shouldn't happen for a UI-triggered
+            // signIn call, but surface it cleanly if it does.
+            result.error("NO_ACTIVITY",
+                "Drive helper is not initialised (no Activity attached).",
                 null); return
         }
         // Surface a typed error if Play services are missing or stale —

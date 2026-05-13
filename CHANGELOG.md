@@ -27,9 +27,9 @@ consolidated into this single entry.
 ### `GlobalConfig` fields
 
 - `iosKeychainGroup` — Keychain Sharing access group (without team prefix).
-- `androidDriveClientId` — OAuth 2.0 Client ID configured in Google Cloud
-  Console (bound to package + signing-cert SHA-1).
-- `syncEnabled` — master switch for iCloud / Drive sync.
+- `syncEnabled` — master switch for iCloud / Drive sync. On Android the
+  Drive OAuth client is resolved at runtime from `google-services.json` by
+  package name + signing-cert SHA-1 — no client ID is required in code.
 - `pinTheme` — Material-3 themable PIN sheet (`PinTheme`).
 - `pinPolicy` — strength rules (`PinPolicy`) — rejects all-same-digit
   and ascending/descending sequences by default.

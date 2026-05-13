@@ -3,10 +3,11 @@ import 'package:syncing_keys/syncing_keys.dart';
 
 /// Minimal example app showing the SyncingKeys SDK in action.
 ///
-/// Replace [_iosKeychainGroup] and [_driveClientId] with your own values
-/// from Xcode / Google Cloud Console (see INTEGRATION.md).
+/// Replace [_iosKeychainGroup] with your own value from Xcode (see
+/// INTEGRATION.md). Android Drive sync needs no code-side ID — drop your
+/// `google-services.json` into `android/app/` and register one Android
+/// OAuth client per signing-cert SHA-1 in Google Cloud Console.
 const String _iosKeychainGroup = 'group.com.example.shared';
-const String _driveClientId = 'REPLACE-ME.apps.googleusercontent.com';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
@@ -15,7 +16,6 @@ Future<void> main() async {
   await SyncingKeys.initialize(
     const GlobalConfig(
       iosKeychainGroup: _iosKeychainGroup,
-      androidDriveClientId: _driveClientId,
       syncEnabled: true,
     ),
     navigatorKey: navigatorKey,

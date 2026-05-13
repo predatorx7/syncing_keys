@@ -5,7 +5,7 @@
   <uses-permission android:name="android.permission.INTERNET" />
 
   <!-- Required to enumerate Google accounts when the developer's app
-       requests an OAuth token for the configured `androidDriveClientId`. -->
+       requests a Drive `appdata` OAuth token via Google Identity. -->
   <uses-permission android:name="android.permission.GET_ACCOUNTS" />
 
   <!-- Used by local_auth (BiometricPrompt) on supported devices. -->

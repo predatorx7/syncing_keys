@@ -5,11 +5,10 @@ import 'syncing_keys_strings.dart';
 /// One-time setup payload passed to [SyncingKeys.initialize].
 ///
 /// Everything is opt-in: an app that just wants on-device storage can leave
-/// `syncEnabled` false and the cloud-side identifiers empty.
+/// `syncEnabled` false and the cloud-side identifier empty.
 class GlobalConfig {
   const GlobalConfig({
     this.iosKeychainGroup,
-    this.androidDriveClientId,
     this.syncEnabled = false,
     this.pinTheme = const PinTheme(),
     this.pinPolicy = const PinPolicy(),
@@ -26,16 +25,15 @@ class GlobalConfig {
   /// Format: `"$(AppIdentifierPrefix)com.yourcompany.shared"`.
   final String? iosKeychainGroup;
 
-  /// OAuth 2.0 Client ID configured in Google Cloud Console for the Drive
-  /// REST API. The scope used by the SDK is
-  /// `https://www.googleapis.com/auth/drive.appdata`, which limits access to
-  /// the hidden `appDataFolder` — the developer's app can never see other
-  /// users' Drive files.
-  final String? androidDriveClientId;
-
   /// Master switch for automatic cloud syncing. When `false`, the SDK behaves
   /// as a pure local store — `saveKey` skips iCloud / Drive, and `getKey`
   /// never reaches out to the network.
+  ///
+  /// On Android, the Drive OAuth client is resolved at runtime from
+  /// `google-services.json` by matching the running APK's package name +
+  /// signing-cert SHA-1 — no client ID needs to be passed in code. Register
+  /// one Android OAuth client per signing cert (debug, upload, Play App
+  /// Signing) in Google Cloud Console and re-download `google-services.json`.
   final bool syncEnabled;
 
   /// Visual theme for the PIN entry overlay.
@@ -64,7 +62,6 @@ class GlobalConfig {
       identical(this, other) ||
       other is GlobalConfig &&
           other.iosKeychainGroup == iosKeychainGroup &&
-          other.androidDriveClientId == androidDriveClientId &&
           other.syncEnabled == syncEnabled &&
           other.pinTheme == pinTheme &&
           other.pinPolicy == pinPolicy &&
@@ -75,7 +72,6 @@ class GlobalConfig {
   @override
   int get hashCode => Object.hash(
         iosKeychainGroup,
-        androidDriveClientId,
         syncEnabled,
         pinTheme,
         pinPolicy,

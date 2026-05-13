@@ -50,18 +50,19 @@ import kotlin.coroutines.resumeWithException
  *     them silently when possible.
  *
  * The developer must:
- *   1. Register their OAuth client in Google Cloud Console with the
- *      SHA-1 of their signing certificate.
- *   2. Pass the client ID to SyncingKeys via `GlobalConfig.androidDriveClientId`.
- *      (Used only as a configuration marker — the runtime authorization
- *      flow is matched implicitly by package name + signing certificate.)
- *   3. Enable the Drive API for the project.
+ *   1. Register an Android OAuth client in Google Cloud Console for each
+ *      `(package name, signing-cert SHA-1)` pair they ship under
+ *      (debug keystore, upload key, Play App Signing key).
+ *   2. Enable the Drive API for the project.
+ *   3. Ship `google-services.json` (Firebase / GCP) in the Android app —
+ *      Google Play Services reads it to resolve the right OAuth client at
+ *      runtime via the running APK's package name + cert SHA-1. No client
+ *      ID needs to be passed in code.
  * See INTEGRATION.md for screenshots / steps.
  * =============================================================================
  */
 class GoogleDriveBackup(
     private val activity: Activity,
-    @Suppress("unused") private val clientId: String,
 ) {
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)

@@ -59,12 +59,10 @@ class MethodChannelSyncingKeys extends SyncingKeysPlatform {
   @override
   Future<void> configure({
     String? iosKeychainGroup,
-    String? androidDriveClientId,
     required bool syncEnabled,
   }) async {
     await _invoke<void>('configure', <String, Object?>{
       'iosKeychainGroup': iosKeychainGroup,
-      'androidDriveClientId': androidDriveClientId,
       'syncEnabled': syncEnabled,
     });
   }

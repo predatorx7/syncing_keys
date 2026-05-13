@@ -10,31 +10,33 @@ the buttons on the home screen to:
 
 ## Configure before you run
 
-The example ships with placeholder identifiers — replace them with your own
-before launching against a real device:
+The example ships with a placeholder Keychain group — replace it before
+launching against a real device:
 
-1. Open `example/lib/main.dart` and update the two top-level constants:
+1. Open `example/lib/main.dart` and update the top-level constant:
 
    ```dart
    const String _iosKeychainGroup = 'group.com.example.shared';
-   const String _driveClientId    = 'REPLACE-ME.apps.googleusercontent.com';
    ```
 
-   - **`_iosKeychainGroup`** — match the Keychain Sharing group you added in
-     Xcode (Signing & Capabilities). See the SDK's
-     [`INTEGRATION.md`](../INTEGRATION.md#3-ios--xcode-capabilities) §3 for
-     the exact steps.
-   - **`_driveClientId`** — an Android OAuth 2.0 Client ID bound to **this
-     example's package name + your debug keystore's SHA-1**. See
-     [`INTEGRATION.md`](../INTEGRATION.md#2-android--google-cloud-console--drive-api)
-     §2 for the full Google Cloud Console walk-through.
+   Match the Keychain Sharing group you added in Xcode (Signing &
+   Capabilities). See the SDK's
+   [`INTEGRATION.md`](../INTEGRATION.md#3-ios--xcode-capabilities) §3 for
+   the exact steps.
 
-2. iOS only — open `example/ios/Runner.xcworkspace` once and enable
+2. Android only — drop your `google-services.json` into
+   `example/android/app/` and register one Android OAuth client per
+   signing-cert SHA-1 in Google Cloud Console. No code-side ID is needed;
+   Play Services picks the right one at runtime. See
+   [`INTEGRATION.md`](../INTEGRATION.md#2-android--google-cloud-console--drive-api)
+   §2 for the full walk-through.
+
+3. iOS only — open `example/ios/Runner.xcworkspace` once and enable
    **Keychain Sharing** + **iCloud → Key-value storage** on the Runner
    target. Re-download the provisioning profile from developer.apple.com
    if you change the App ID.
 
-3. Run it:
+4. Run it:
 
    ```bash
    cd example

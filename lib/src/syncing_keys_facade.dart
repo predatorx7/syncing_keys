@@ -19,7 +19,6 @@ import 'models/stored_key.dart';
 /// ```dart
 /// await SyncingKeys.initialize(GlobalConfig(
 ///   iosKeychainGroup: 'group.com.acme.wallet',
-///   androidDriveClientId: '12345-abc.apps.googleusercontent.com',
 ///   syncEnabled: true,
 /// ));
 ///
@@ -78,7 +77,6 @@ class SyncingKeys {
 
     await SyncingKeysPlatform.instance.configure(
       iosKeychainGroup: config.iosKeychainGroup,
-      androidDriveClientId: config.androidDriveClientId,
       syncEnabled: config.syncEnabled,
     );
 

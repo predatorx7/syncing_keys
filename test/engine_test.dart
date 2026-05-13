@@ -194,7 +194,6 @@ class _FakePlatform extends SyncingKeysPlatform with MockPlatformInterfaceMixin 
   @override
   Future<void> configure({
     String? iosKeychainGroup,
-    String? androidDriveClientId,
     required bool syncEnabled,
   }) async {}
 

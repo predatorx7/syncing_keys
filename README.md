@@ -10,7 +10,6 @@ do the right thing based on configuration.
 ```dart
 await SyncingKeys.initialize(GlobalConfig(
   iosKeychainGroup: 'group.com.acme.shared',
-  androidDriveClientId: '12345-abc.apps.googleusercontent.com',
   syncEnabled: true,
 ), navigatorKey: navKey);
 
@@ -42,9 +41,9 @@ final stark = await SyncingKeys.generateStarknetKey(id: 'main');
 
 ## Configuration cheat-sheet
 
-`GlobalConfig` has two identifiers you'll need to obtain once per app. Set
-`syncEnabled: false` if you don't want cloud sync yet — both fields then
-become optional and can stay `null`.
+`GlobalConfig` has one identifier you'll need to obtain once per app
+(iOS-only). Set `syncEnabled: false` if you don't want cloud sync yet —
+the field then becomes optional and can stay `null`.
 
 ### 🍎 `iosKeychainGroup` — the iOS Keychain Sharing access group
 
@@ -74,31 +73,26 @@ iosKeychainGroup: 'group.com.acme.shared'  // shared across your suite
 > **Tip:** Leave it `null` to fall back to the calling app's default access
 > group. That's fine for single-app installs.
 
-### 🤖 `androidDriveClientId` — the Google OAuth 2.0 Client ID
+### 🤖 Android Drive sync — no code-side ID needed
 
-**What it is.** A string like
-`123456789012-abcde1f2g3h4i5j6.apps.googleusercontent.com`. It identifies
-your app to Google's OAuth server so the SDK can mint a short-lived access
-token for the Drive REST API and store encrypted envelopes in the user's
-hidden `appDataFolder`.
+The plugin uses Google Identity's `Identity.getAuthorizationClient(...)`,
+which resolves the OAuth client at runtime from the running APK's
+**package name + signing-cert SHA-1** against the entries in your
+`google-services.json`. Nothing about the Client ID needs to be passed
+in code — register the right `(package, SHA-1)` pairs in Cloud Console
+and the right one is picked automatically per build.
 
-The Client ID is bound to two things, which means a stolen ID is useless to
-anyone else — they can't sign builds as you:
-
-- your Android **package name** (e.g. `com.acme.wallet`)
-- the **SHA-1 fingerprint** of your app's signing certificate
-
-**How to obtain it:**
+**How to set it up (once per Cloud project):**
 
 1. Open https://console.cloud.google.com/ → **Select a project → New Project**.
 2. **APIs & Services → Library** → search **Google Drive API** → **Enable**.
-3. **APIs & Services → OAuth consent screen** → app name, support email, add
-   the `…/auth/drive.appdata` scope (and **only** that), add yourself as a test
-   user.
+3. **APIs & Services → OAuth consent screen** → app name, support email,
+   add the `…/auth/drive.appdata` scope (and **only** that), add yourself
+   as a test user.
 4. **APIs & Services → Credentials → Create Credentials → OAuth client ID**.
 5. **Application type:** Android.
 6. **Package name:** your app's `applicationId`.
-7. **SHA-1:** paste the fingerprint of your signing cert.
+7. **SHA-1:** paste the fingerprint of *each* signing cert you ship under.
 
    ```bash
    # Debug builds
@@ -109,24 +103,25 @@ anyone else — they can't sign builds as you:
    ./gradlew signingReport | grep SHA1
    ```
 
-   For Play releases, get the **Play App Signing SHA-1** from the Play
-   Console (*App integrity → App signing*) and create a **second** Client ID
-   with that SHA-1.
+   For Play releases, grab both the **upload key SHA-1** and the
+   **Play App Signing key SHA-1** from the Play Console
+   (*App integrity → App signing*) and create one Android OAuth client
+   per SHA-1.
 
-8. Click **Create**, copy the resulting string into
-   `GlobalConfig.androidDriveClientId`.
+8. Re-download `google-services.json` and drop it into `android/app/`.
+   Google Play Services reads it at runtime and picks the entry whose
+   `(package_name, certificate_hash)` matches the running APK.
 
-> **Tip:** Create one Client ID per signing key (debug + release) and select
-> the right one per build flavor — otherwise your release build will silently
-> fail to authenticate.
+> **Tip:** No build-flavor switching, no `--dart-define`, no per-build
+> Client ID constants — the wiring is fully automatic as long as every
+> SHA-1 you ship under has an entry in `google-services.json`.
 
 ### Putting it together
 
 ```dart
 await SyncingKeys.initialize(
   const GlobalConfig(
-    iosKeychainGroup: 'group.com.acme.shared',                    // from Xcode
-    androidDriveClientId: '12345-abc.apps.googleusercontent.com', // from Cloud Console
+    iosKeychainGroup: 'group.com.acme.shared', // from Xcode
     syncEnabled: true,
   ),
   navigatorKey: navKey,
@@ -143,8 +138,9 @@ see [`INTEGRATION.md`](./INTEGRATION.md).
 
 1. Add the plugin to your `pubspec.yaml`.
 2. Enable **Keychain Sharing** and **iCloud** capabilities in Xcode.
-3. Register an Android **OAuth Client ID** in Google Cloud Console and enable
-   the Drive API.
+3. Register an Android **OAuth Client ID** per signing-cert SHA-1 in Google
+   Cloud Console, enable the Drive API, and ship `google-services.json` in
+   `android/app/`. No Client ID needs to be passed in code.
 4. Call `SyncingKeys.initialize(GlobalConfig(...))` once at app start.
 5. Use `SyncingKeys.generateStarknetKey(id: 'main')` (or `generateEthereumKey`,
    or `saveKey/getKey/deleteKey`). That's it.

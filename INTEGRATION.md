@@ -49,65 +49,35 @@ UI and only accessible by the OAuth client that uploaded them.
 4. **Scopes** → Add `…/auth/drive.appdata` (and nothing else — minimal scope!).
 5. Add your test users while the app is in *Testing*.
 
-### 2.4 Create the Android OAuth 2.0 Client ID
+### 2.4 Create one Android OAuth 2.0 Client ID per signing-cert SHA-1
+
+A Client ID is bound to **(package name, SHA-1)**. The plugin doesn't ask
+you to pass a Client ID in code — Google Play Services resolves the
+correct one at runtime from `google-services.json` by matching the
+running APK's package + cert SHA-1. You just have to make sure every
+SHA-1 you ship under has an entry.
+
+For each of the keystores below, do:
 
 1. APIs & Services → **Credentials** → **Create Credentials → OAuth client ID**.
 2. Application type: **Android**.
-3. Package name: your app's id (e.g. `com.acme.wallet`).
-4. SHA-1 certificate fingerprint:
+3. Package name: your app's `applicationId`.
+4. SHA-1 certificate fingerprint: the value for that keystore from the
+   table below.
 
-   ```bash
-   # Debug builds
-   ./gradlew signingReport
-   # …or directly
-   keytool -list -v -keystore ~/.android/debug.keystore \
-       -alias androiddebugkey -storepass android -keypass android
-   ```
+| Keystore                     | How to get its SHA-1                                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `~/.android/debug.keystore`  | `keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android` or `./gradlew signingReport` |
+| Team-shared upload key       | `keytool -list -v -keystore upload-keystore.jks -alias upload`                                                |
+| **Play App Signing**         | Play Console → *App integrity* → *App signing* → copy the SHA-1 from the *App signing key certificate* block  |
 
-   Add the resulting `SHA1` to the credential. **You must register one Client
-   ID per signing certificate** — see the next section.
-5. Copy the Client ID — that's the value you pass to
-   `GlobalConfig.androidDriveClientId`.
+After creating the credentials, re-download `google-services.json` from
+the Firebase / GCP console (it now contains one `oauth_client` entry per
+SHA-1 you registered) and drop it into `android/app/google-services.json`.
+That's the only artifact the runtime reads — no Gradle BuildConfig
+field, no `--dart-define`, no per-flavor switching needed.
 
-### 2.5 Pick the right Client ID per build flavor
-
-A Client ID is bound to **(package name, SHA-1)**. That means a release build
-signed with the Play upload key will fail to authenticate against a Client ID
-registered with your debug keystore's SHA-1. Register one Client ID for each
-keystore you build with, then select the right one at compile time:
-
-| Build         | Keystore                     | How to get its SHA-1                                 |
-| ------------- | ---------------------------- | ---------------------------------------------------- |
-| Debug         | `~/.android/debug.keystore`  | `keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android` |
-| Internal/QA   | Your team-shared upload key  | `keytool -list -v -keystore upload-keystore.jks -alias upload`                                   |
-| Production    | **Play App Signing**         | Play Console → *App integrity* → *App signing* → copy the SHA-1 from the *App signing key certificate* block |
-
-Wire the right ID per flavor with Gradle BuildConfig fields, then read it from
-Dart via a small constants file:
-
-```kotlin
-// android/app/build.gradle.kts
-android {
-    buildTypes {
-        debug   { buildConfigField("String", "DRIVE_CLIENT_ID", "\"12345-debug.apps.googleusercontent.com\"") }
-        release { buildConfigField("String", "DRIVE_CLIENT_ID", "\"67890-prod.apps.googleusercontent.com\"")  }
-    }
-}
-```
-
-…and surface it to Dart at startup (e.g. via a one-method `MethodChannel`).
-Alternatively, just use `--dart-define=DRIVE_CLIENT_ID=…` per build:
-
-```bash
-flutter build apk --release \
-    --dart-define=DRIVE_CLIENT_ID=67890-prod.apps.googleusercontent.com
-```
-
-```dart
-const _driveClientId = String.fromEnvironment('DRIVE_CLIENT_ID');
-```
-
-### 2.6 Trigger the Google account picker on first run
+### 2.5 Trigger the Google account picker on first run
 
 The plugin lazily requests an access token, so the first time the user opts
 into cloud sync you have to surface the Google account picker. The SDK
@@ -131,7 +101,7 @@ You can also let the official `google_sign_in` Flutter plugin handle the
 picker with the `drive.appdata` scope; SyncingKeys will pick up the cached
 account automatically via `GoogleSignIn.getLastSignedInAccount`.
 
-### 2.7 Android manifest additions
+### 2.6 Android manifest additions
 
 The plugin's own manifest already declares:
 
@@ -196,7 +166,6 @@ void main() async {
   await SyncingKeys.initialize(
     GlobalConfig(
       iosKeychainGroup: 'group.com.acme.shared',
-      androidDriveClientId: '12345-abc.apps.googleusercontent.com',
       syncEnabled: true,
     ),
     navigatorKey: navKey,
@@ -350,8 +319,9 @@ existing envelopes stay openable while you migrate users.
 
 ## 6. Production checklist
 
-- [ ] Replaced debug SHA-1 with the Play release signing cert SHA-1 in
-      Google Cloud Console.
+- [ ] Registered Android OAuth clients for both the **upload key SHA-1**
+      and the **Play App Signing SHA-1** in Google Cloud Console, then
+      re-downloaded `google-services.json` into `android/app/`.
 - [ ] OAuth consent screen moved out of **Testing** if you want non-listed
       users to be able to sign in.
 - [ ] Tuned `GlobalConfig.pbkdf2Iterations` to your security target

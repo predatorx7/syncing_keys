@@ -14,7 +14,6 @@ class FakeSyncingKeysPlatform extends SyncingKeysPlatform
   @override
   Future<void> configure({
     String? iosKeychainGroup,
-    String? androidDriveClientId,
     required bool syncEnabled,
   }) async {}
 
