@@ -1,4 +1,3 @@
-import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:syncing_keys/src/engine/pin_cache.dart';
 
@@ -25,16 +24,6 @@ void main() {
       addTearDown(c.dispose);
       c.set('p');
       c.clear();
-      expect(c.get(), isNull);
-    });
-
-    test('lifecycle pause clears the cache', () async {
-      final c = PinCache(ttl: const Duration(minutes: 10));
-      addTearDown(c.dispose);
-      c.set('p');
-      expect(c.get(), 'p');
-      // Simulate an app pause — the observer should flush the cache.
-      c.didChangeAppLifecycleState(AppLifecycleState.paused);
       expect(c.get(), isNull);
     });
   });

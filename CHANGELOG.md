@@ -33,9 +33,10 @@ consolidated into this single entry.
 - `pinTheme` — Material-3 themable PIN sheet (`PinTheme`).
 - `pinPolicy` — strength rules (`PinPolicy`) — rejects all-same-digit
   and ascending/descending sequences by default.
-- `pinCacheDuration` — in-memory PIN cache TTL; default 10 min;
-  `Duration.zero` disables; cleared on `AppLifecycleState.paused`,
-  `deleteKey`, 3-strikes wrong PIN, and `signOutOfCloud`.
+- `pinCacheDuration` — in-memory PIN cache TTL; default 3 days;
+  `Duration.zero` disables; cleared on `deleteKey`, 3-strikes wrong PIN,
+  PIN change, and `signOutOfCloud`. Survives app backgrounding —
+  process restart is the only implicit drop.
 - `pbkdf2Iterations` — PBKDF2-HMAC-SHA256 cost factor; default 120 000.
 
 ### Cryptography

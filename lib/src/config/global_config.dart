@@ -14,7 +14,7 @@ class GlobalConfig {
     this.pinPolicy = const PinPolicy(),
     this.strings = const SyncingKeysStrings(),
     this.pbkdf2Iterations = 120000,
-    this.pinCacheDuration = const Duration(minutes: 10),
+    this.pinCacheDuration = const Duration(days: 3),
   })  : assert(pbkdf2Iterations >= 50000,
             'PBKDF2 iterations should be at least 50k for production use.');
 
