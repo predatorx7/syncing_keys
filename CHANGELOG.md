@@ -1,3 +1,61 @@
+## 0.2.0 — 2026-06-22
+
+Biometric (Face ID / fingerprint) unlock now actually works, and the PIN
+entry sheet correctly closes after a successful gesture.
+
+> **⚠ Behavioural change — read before upgrading.** The source API is fully
+> backwards-compatible (every addition is an optional parameter, a new method,
+> or a new defaulted config field — no existing call site needs to change).
+> **However, the default behaviour changed:** a successfully-entered PIN is now
+> persisted to the platform Keychain / Keystore so it can be surfaced by a
+> biometric gesture. Previously the PIN was held in memory only and never
+> written to disk. This is the reason for the minor (breaking) version bump.
+> If your threat model requires the PIN to never touch disk, opt out with
+> `GlobalConfig(biometricUnlockEnabled: false)`.
+
+### Fixed
+
+- **Biometric unlock no longer leaves the sheet open.** A successful biometric
+  gesture previously authenticated and then did nothing — no `Navigator.pop`,
+  so the PIN sheet stayed up. It now surfaces the stored PIN and closes,
+  exactly as if the user had typed it.
+
+### Added
+
+- **`GlobalConfig.biometricUnlockEnabled`** (default `true`) — master switch
+  for the persist-and-biometric-unlock flow. Set `false` to never write the
+  PIN to disk and hide the biometric button entirely.
+- **`SyncingKeys.clearBiometricPin()`** — forgets the persisted PIN (e.g. to
+  back a "disable fingerprint unlock" toggle or a sign-out) without changing
+  the PIN or deleting any key. No-op when biometric unlock is disabled.
+- **`BiometricPinStore`** — Keychain / Keystore-backed (`flutter_secure_storage`)
+  at-rest store for the biometric-gated PIN. The `local_auth` gesture is the
+  user-presence gate; reads happen only after it succeeds. This is **not**
+  hardware biometric-binding — see INTEGRATION §5.4 for the trade-offs.
+- New `flutter_secure_storage` dependency.
+
+### Behaviour
+
+- The decrypt sheet auto-prompts for biometrics on open, and only shows the
+  button when a PIN is actually stored to unlock.
+- The persisted PIN is dropped on the same invalidation events as the in-memory
+  cache: 3-strikes wrong PIN, `changePin`, and `deleteKey`. It is **not**
+  auto-prompted on a retry prompt, so a stale stored PIN can't silently loop.
+- There is still **no "reset / forgot PIN" API by design** — the PIN derives
+  the encryption key, so a forgotten PIN is unrecoverable. `changePin` (needs
+  the old PIN) and `deleteKey` remain the only paths; `clearBiometricPin` only
+  forgets the biometric convenience copy.
+
+### Tests
+
+- New widget tests (`pin_entry_biometric_test.dart`) cover the close-on-success
+  regression, button-hidden-when-empty, and cancel-falls-back-to-typing — with
+  `local_auth` faked at the platform-interface layer.
+- New engine tests cover PIN persistence on seal, and forgetting on
+  `changePin` / `deleteKey` / `clearBiometricPin` / opt-out.
+
+---
+
 ## 0.1.0 — 2026-05-12
 
 Initial release of the SyncingKeys SDK. Pre-release polish has been

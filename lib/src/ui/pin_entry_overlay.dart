@@ -38,6 +38,12 @@ class PinEntryOverlay {
   /// Throws [PinEntryCancelledException] if the user dismisses without
   /// completing entry. Callers should let that exception propagate — the
   /// CRUD engine catches it and treats it as a user-initiated cancel.
+  /// [hasStoredPin] / [readStoredPin] wire the optional biometric unlock. When
+  /// both are supplied (decrypt path only) the sheet offers a Face ID /
+  /// fingerprint button: it checks [hasStoredPin] to decide whether to show
+  /// the button, and — only after a successful biometric gesture — calls
+  /// [readStoredPin] and closes the sheet with that PIN. Leave them null to
+  /// disable biometrics entirely (e.g. the encrypt path, or tests).
   static Future<String> show({
     required BuildContext context,
     required PinTheme theme,
@@ -45,6 +51,9 @@ class PinEntryOverlay {
     PinPolicy? policy,
     SyncingKeysStrings strings = const SyncingKeysStrings(),
     String? errorMessage,
+    Future<bool> Function()? hasStoredPin,
+    Future<String?> Function()? readStoredPin,
+    bool autoPromptBiometric = true,
   }) async {
     final result = await showModalBottomSheet<String>(
       context: context,
@@ -60,6 +69,9 @@ class PinEntryOverlay {
         policy: purpose == PinPurpose.encrypt ? policy : null,
         strings: strings,
         initialError: errorMessage,
+        hasStoredPin: hasStoredPin,
+        readStoredPin: readStoredPin,
+        autoPromptBiometric: autoPromptBiometric,
       ),
     );
     if (result == null) throw const PinEntryCancelledException();
@@ -74,6 +86,9 @@ class _PinSheet extends StatefulWidget {
     required this.strings,
     this.policy,
     this.initialError,
+    this.hasStoredPin,
+    this.readStoredPin,
+    this.autoPromptBiometric = true,
   });
 
   final PinTheme theme;
@@ -81,6 +96,20 @@ class _PinSheet extends StatefulWidget {
   final SyncingKeysStrings strings;
   final PinPolicy? policy;
   final String? initialError;
+
+  /// Existence check for a biometric-unlockable PIN (no plaintext). Null when
+  /// biometric unlock is disabled for this prompt.
+  final Future<bool> Function()? hasStoredPin;
+
+  /// Reads the stored PIN in plaintext. Invoked only after a successful
+  /// biometric gesture. Null when biometric unlock is disabled.
+  final Future<String?> Function()? readStoredPin;
+
+  /// Whether to fire the biometric prompt automatically when the sheet opens.
+  /// The caller sets this false on a *retry* prompt (after a wrong PIN) so a
+  /// stale stored PIN can't auto-loop — the button stays available for a
+  /// manual tap, but typing is the default.
+  final bool autoPromptBiometric;
 
   @override
   State<_PinSheet> createState() => _PinSheetState();
@@ -102,6 +131,10 @@ class _PinSheetState extends State<_PinSheet> with TickerProviderStateMixin {
   /// enrolled, user dismissed, etc.) we silently fall back to PIN entry.
   final LocalAuthentication _localAuth = LocalAuthentication();
   bool _biometricChecked = false;
+
+  /// Whether to show the biometric button — set once we've confirmed the
+  /// device has enrolled biometrics *and* there's a stored PIN to unlock.
+  bool _biometricAvailable = false;
 
   @override
   void initState() {
@@ -128,22 +161,30 @@ class _PinSheetState extends State<_PinSheet> with TickerProviderStateMixin {
     if (_biometricChecked) return;
     _biometricChecked = true;
     if (widget.purpose != PinPurpose.decrypt) return;
+    // No store callbacks → biometric unlock disabled for this prompt.
+    final hasStored = widget.hasStoredPin;
+    if (hasStored == null || widget.readStoredPin == null) return;
 
     try {
       final canCheck = await _localAuth.canCheckBiometrics;
       final available = await _localAuth.getAvailableBiometrics();
       if (!canCheck || available.isEmpty) return;
-      // We don't return a derived key from biometrics — biometrics are only a
-      // signal to surface a stored (in-memory cached) PIN. Future work could
-      // wrap the PIN with the platform Keystore-bound biometric key.
-      // For now: just show the icon so the user can tap it manually.
-      if (mounted) setState(() {});
+      // Only surface biometrics if there's actually a PIN persisted to unlock.
+      if (!await hasStored()) return;
+      if (!mounted) return;
+      setState(() => _biometricAvailable = true);
+      // Auto-prompt on open — this is an "unlock" screen, so we lead with the
+      // gesture and let the user fall back to typing by cancelling. Skipped on
+      // retry prompts so a stale stored PIN can't silently re-loop.
+      if (widget.autoPromptBiometric) await _tryBiometric();
     } catch (_) {
       /* swallow — biometrics are best-effort. */
     }
   }
 
   Future<void> _tryBiometric() async {
+    final read = widget.readStoredPin;
+    if (read == null) return;
     try {
       final ok = await _localAuth.authenticate(
         localizedReason: widget.strings.biometricPromptReason,
@@ -153,12 +194,14 @@ class _PinSheetState extends State<_PinSheet> with TickerProviderStateMixin {
         ),
       );
       if (!ok) return;
-      // The biometric prompt succeeded — we still need a PIN, but the host
-      // app can choose to skip this prompt entirely on subsequent sessions
-      // by caching the PIN in a Keystore-bound way. For the open-source SDK
-      // surface, we leave the PIN entry visible and just close on success
-      // with a sentinel "biometric:ok" string. Real callers should bind a
-      // PIN to a biometric-protected key — see INTEGRATION.md.
+      // Gesture succeeded — surface the persisted PIN and close the sheet with
+      // it, exactly as if the user had typed it. `null` means the store was
+      // cleared between the availability check and now (e.g. a concurrent
+      // changePin) — fall through to manual entry rather than popping garbage.
+      final pin = await read();
+      if (pin == null || pin.isEmpty) return;
+      if (!mounted) return;
+      Navigator.of(context).pop(pin);
     } catch (_) {
       /* ignore — fall through to PIN typing. */
     }
@@ -341,8 +384,13 @@ class _PinSheetState extends State<_PinSheet> with TickerProviderStateMixin {
       [digit('4'), digit('5'), digit('6')],
       [digit('7'), digit('8'), digit('9')],
       [
-        icon(bioIcon, _tryBiometric,
-            label: widget.strings.biometricButtonLabel),
+        // Only show the biometric button once we've confirmed it can do
+        // something; otherwise keep the slot empty so '0' stays centred.
+        if (_biometricAvailable)
+          icon(bioIcon, _tryBiometric,
+              label: widget.strings.biometricButtonLabel)
+        else
+          const SizedBox(width: 72, height: 72),
         digit('0'),
         icon(Icons.backspace_outlined, _onBackspace,
             label: widget.strings.deleteDigitLabel),

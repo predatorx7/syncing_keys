@@ -9,6 +9,7 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:syncing_keys/syncing_keys.dart';
 import 'package:syncing_keys/syncing_keys_platform_interface.dart';
 import 'package:syncing_keys/src/crypto/envelope.dart';
+import 'package:syncing_keys/src/engine/biometric_pin_store.dart';
 import 'package:syncing_keys/src/engine/crud_engine.dart';
 
 void main() {
@@ -24,27 +25,31 @@ void main() {
 
   // Helper — build an engine wired to a fresh fake platform and pre-seed
   // its PIN cache with [pin] so no overlay has to render.
-  ({CrudEngine engine, _FakePlatform fake}) buildEngine({
+  ({CrudEngine engine, _FakePlatform fake, _FakeBioStore bio}) buildEngine({
     bool sync = false,
     String pin = '246813',
+    bool biometricEnabled = true,
   }) {
     final fake = _FakePlatform();
     SyncingKeysPlatform.instance = fake;
 
+    final bio = _FakeBioStore();
     final engine = CrudEngine(
       config: GlobalConfig(
         syncEnabled: sync,
+        biometricUnlockEnabled: biometricEnabled,
         // Use a low PBKDF2 cost so tests don't churn — the crypto behaviour
         // is identical at any cost factor ≥ 1.
         pbkdf2Iterations: 50000,
       ),
       contextProvider: () => fakeContext,
+      biometricStore: bio,
     );
     // Inject the seed PIN into the engine's private cache so generate /
     // get / changePin don't try to summon the bottom sheet.
     _seedPin(engine, pin);
     addTearDown(engine.dispose);
-    return (engine: engine, fake: fake);
+    return (engine: engine, fake: fake, bio: bio);
   }
 
   group('listKeys', () {
@@ -141,6 +146,81 @@ void main() {
       expect(r.fake.local['a'], equals(before));
     });
   });
+
+  group('biometric PIN persistence', () {
+    test('sealing a key persists the PIN for biometric unlock', () async {
+      final r = buildEngine(pin: '246813');
+      await r.engine.generateAndStoreEthereum('a');
+      expect(r.bio.stored, '246813');
+    });
+
+    test('changePin forgets the persisted PIN', () async {
+      final r = buildEngine(pin: '246813');
+      await r.engine.generateAndStoreEthereum('a');
+      expect(r.bio.stored, isNotNull);
+
+      await r.engine.changePin(oldPin: '246813', newPin: '975312');
+      expect(r.bio.stored, isNull);
+      expect(r.bio.clearCalls, greaterThanOrEqualTo(1));
+    });
+
+    test('deleteKey forgets the persisted PIN', () async {
+      final r = buildEngine(pin: '246813');
+      await r.engine.generateAndStoreEthereum('a');
+      expect(r.bio.stored, isNotNull);
+
+      await r.engine.deleteKey('a');
+      expect(r.bio.stored, isNull);
+    });
+
+    test('clearBiometricPin forgets the persisted PIN', () async {
+      final r = buildEngine(pin: '246813');
+      await r.engine.generateAndStoreEthereum('a');
+      expect(r.bio.stored, isNotNull);
+
+      await r.engine.clearBiometricPin();
+      expect(r.bio.stored, isNull);
+    });
+
+    test('biometricUnlockEnabled: false never persists the PIN', () async {
+      final r = buildEngine(pin: '246813', biometricEnabled: false);
+      await r.engine.generateAndStoreEthereum('a');
+      // The engine drops the store entirely when disabled — no writes at all.
+      expect(r.bio.saveCalls, 0);
+      expect(r.bio.stored, isNull);
+      // And the reset API is a safe no-op.
+      await r.engine.clearBiometricPin();
+      expect(r.bio.clearCalls, 0);
+    });
+  });
+}
+
+/// In-memory stand-in for [BiometricPinStore]. We subclass the concrete store
+/// (its methods are overridable) and override all four so no real Keychain /
+/// Keystore channel is touched. `super()` only constructs a FlutterSecureStorage
+/// object — harmless, since every method that would hit a channel is overridden.
+class _FakeBioStore extends BiometricPinStore {
+  String? stored;
+  int saveCalls = 0;
+  int clearCalls = 0;
+
+  @override
+  Future<void> save(String pin) async {
+    saveCalls++;
+    stored = pin;
+  }
+
+  @override
+  Future<String?> read() async => stored;
+
+  @override
+  Future<bool> has() async => stored != null;
+
+  @override
+  Future<void> clear() async {
+    clearCalls++;
+    stored = null;
+  }
 }
 
 /// We tunnel into CrudEngine's private PinCache through its public

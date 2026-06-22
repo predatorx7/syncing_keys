@@ -260,6 +260,49 @@ Other behaviour worth knowing:
 - The cached session PIN is wiped on completion — the next CRUD call will
   prompt for the new PIN.
 
+### 5.4 Biometric (Face ID / fingerprint) unlock
+
+When a device has enrolled biometrics, the decrypt prompt leads with a Face ID
+/ fingerprint gesture instead of making the user type their PIN. It works like
+this:
+
+1. On the **first** successful PIN entry (any `saveKey`/`getKey`), the SDK
+   persists the PIN in the platform Keychain / Keystore-backed
+   `EncryptedSharedPreferences`.
+2. On the **next** decrypt, the sheet auto-prompts for biometrics. On success
+   it reads the stored PIN and closes — the user never types.
+3. On a wrong-PIN streak (3 strikes), a `changePin`, or a `deleteKey`, the
+   stored PIN is dropped so a stale fingerprint can't linger.
+
+The biometric gesture (`local_auth`) is the user-presence gate; the Keychain /
+Keystore provides at-rest protection. This is **not** hardware biometric-binding
+— on a rooted / jailbroken device the stored PIN is readable without the
+gesture, the same out-of-scope threat the rest of the SDK accepts (the in-memory
+PIN cache already holds plaintext for its TTL).
+
+Opt out entirely — no PIN is ever written to disk and the biometric button
+never appears:
+
+```dart
+await SyncingKeys.initialize(GlobalConfig(
+  biometricUnlockEnabled: false, // default: true
+));
+```
+
+Back a "disable fingerprint unlock" toggle (or a sign-out) by forgetting the
+stored PIN without touching the keys themselves:
+
+```dart
+await SyncingKeys.clearBiometricPin();
+```
+
+> **There is no "reset PIN" / "forgot PIN" API, by design.** The PIN derives
+> the encryption key (PBKDF2), so it can't be reset without knowing it — a
+> forgotten PIN is unrecoverable (no escrow). Your only options are
+> `changePin` (rotate, requires the old PIN) or `deleteKey` (drop the key and
+> regenerate). `clearBiometricPin` only forgets the biometric convenience copy;
+> it does **not** change the PIN.
+
 ### 5.3 `SyncingKeysStrings` — localizing user-visible copy
 
 `PinTheme.title` / `PinTheme.subtitle` already cover the *encrypt-side* PIN

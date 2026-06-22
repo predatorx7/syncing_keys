@@ -15,6 +15,7 @@ class GlobalConfig {
     this.strings = const SyncingKeysStrings(),
     this.pbkdf2Iterations = 120000,
     this.pinCacheDuration = const Duration(days: 3),
+    this.biometricUnlockEnabled = true,
   })  : assert(pbkdf2Iterations >= 50000,
             'PBKDF2 iterations should be at least 50k for production use.');
 
@@ -57,6 +58,15 @@ class GlobalConfig {
   /// to disable the cache and prompt for every CRUD call.
   final Duration pinCacheDuration;
 
+  /// When true (default), a successfully-entered PIN is also persisted in the
+  /// platform Keychain / Keystore so the user can unlock with Face ID /
+  /// fingerprint instead of re-typing it. The persisted PIN is read only after
+  /// a successful biometric gesture and survives process restarts. Set to
+  /// `false` to opt out entirely — no PIN is ever written to disk and the
+  /// biometric button never appears. See [BiometricPinStore] for the security
+  /// trade-offs.
+  final bool biometricUnlockEnabled;
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -67,7 +77,8 @@ class GlobalConfig {
           other.pinPolicy == pinPolicy &&
           other.strings == strings &&
           other.pbkdf2Iterations == pbkdf2Iterations &&
-          other.pinCacheDuration == pinCacheDuration;
+          other.pinCacheDuration == pinCacheDuration &&
+          other.biometricUnlockEnabled == biometricUnlockEnabled;
 
   @override
   int get hashCode => Object.hash(
@@ -78,5 +89,6 @@ class GlobalConfig {
         strings,
         pbkdf2Iterations,
         pinCacheDuration,
+        biometricUnlockEnabled,
       );
 }

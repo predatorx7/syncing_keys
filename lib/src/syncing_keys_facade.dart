@@ -165,6 +165,17 @@ class SyncingKeys {
   /// cloud as well. Idempotent — deleting a non-existent id is a no-op.
   static Future<void> deleteKey(String id) => _e.deleteKey(id);
 
+  /// Forgets the PIN persisted for biometric (Face ID / fingerprint) unlock,
+  /// so the user is asked to type it again on the next decrypt. Use this to
+  /// back a "disable fingerprint unlock" toggle, or after a sign-out.
+  ///
+  /// This does **not** change or reset the PIN itself — there is no
+  /// reset-without-old-PIN path by design (the PIN derives the encryption key;
+  /// a forgotten PIN is unrecoverable). To rotate the PIN use [changePin]; to
+  /// drop a key entirely use [deleteKey]. No-op when
+  /// [GlobalConfig.biometricUnlockEnabled] is false.
+  static Future<void> clearBiometricPin() => _e.clearBiometricPin();
+
   /// Whether the platform can currently talk to its cloud backend. Useful
   /// for "you're offline" UI hints. Returns `false` when sync is disabled.
   static Future<bool> isCloudAvailable() =>

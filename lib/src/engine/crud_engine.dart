@@ -15,6 +15,7 @@ import '../models/key_type.dart';
 import '../models/stored_key.dart';
 import '../ui/loading_overlay.dart';
 import '../ui/pin_entry_overlay.dart';
+import 'biometric_pin_store.dart';
 import 'change_pin_result.dart';
 import 'pin_cache.dart';
 
@@ -47,7 +48,11 @@ class CrudEngine {
   CrudEngine({
     required this.config,
     required this.contextProvider,
-  }) : _pinCache = PinCache(ttl: config.pinCacheDuration);
+    BiometricPinStore? biometricStore,
+  })  : _pinCache = PinCache(ttl: config.pinCacheDuration),
+        _biometricStore = config.biometricUnlockEnabled
+            ? (biometricStore ?? BiometricPinStore())
+            : null;
 
   final GlobalConfig config;
 
@@ -58,10 +63,45 @@ class CrudEngine {
 
   final PinCache _pinCache;
 
+  /// Persistent, biometric-gated PIN store. Null when
+  /// [GlobalConfig.biometricUnlockEnabled] is false — in that case no PIN is
+  /// ever written to disk and the biometric button never appears.
+  final BiometricPinStore? _biometricStore;
+
   /// Test-only accessor for the session PIN cache. Used in unit tests to
   /// pre-seed a PIN so CRUD calls don't try to render the bottom sheet.
   @visibleForTesting
   PinCache get pinCacheForTest => _pinCache;
+
+  /// Persists a known-good PIN for biometric unlock. Best-effort: a Keychain /
+  /// Keystore write failure must never break the CRUD operation that produced
+  /// the PIN, so we swallow errors here.
+  Future<void> _rememberPin(String pin) async {
+    final store = _biometricStore;
+    if (store == null) return;
+    try {
+      await store.save(pin);
+    } catch (_) {
+      /* best-effort — biometric convenience only. */
+    }
+  }
+
+  /// Drops the persisted PIN. Called wherever the in-memory cache is cleared
+  /// for a PIN-invalidation reason (wrong-PIN strikes, `changePin`,
+  /// `deleteKey`). Also best-effort.
+  Future<void> _forgetPin() async {
+    final store = _biometricStore;
+    if (store == null) return;
+    try {
+      await store.clear();
+    } catch (_) {
+      /* best-effort. */
+    }
+  }
+
+  /// Wipes the persisted biometric PIN on request (e.g. a "disable fingerprint
+  /// unlock" toggle). No-op when biometric unlock is disabled.
+  Future<void> clearBiometricPin() => _forgetPin();
 
   /// Convenience for retrieving the platform implementation.
   SyncingKeysPlatform get _platform => SyncingKeysPlatform.instance;
@@ -154,6 +194,8 @@ class CrudEngine {
       syncToCloud: config.syncEnabled,
     );
     _pinCache.set(pin); // record after the platform write succeeded.
+    // Persist for biometric unlock so the *next* getKey can be a fingerprint.
+    await _rememberPin(pin);
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -238,15 +280,25 @@ class CrudEngine {
         strings: config.strings,
         purpose: PinPurpose.decrypt,
         errorMessage: errorMessage,
+        hasStoredPin: _biometricStore?.has,
+        readStoredPin: _biometricStore?.read,
+        // Auto-fire biometrics only on the first prompt; after a wrong PIN
+        // (errorMessage set) fall back to manual entry so a stale stored PIN
+        // can't loop.
+        autoPromptBiometric: errorMessage == null,
       );
       try {
         final plain = env.open(pin);
         _pinCache.set(pin);
+        await _rememberPin(pin);
         return plain;
       } on WrongPinException {
         attempts += 1;
         if (attempts >= 3) {
           _pinCache.clear();
+          // The persisted PIN no longer opens this envelope (likely rotated on
+          // another device) — drop it so we stop offering a dead fingerprint.
+          await _forgetPin();
           rethrow;
         }
         errorMessage = config.strings.wrongPinRetry;
@@ -375,6 +427,9 @@ class CrudEngine {
     }
 
     _pinCache.clear();
+    // The persisted PIN is now stale (envelopes re-sealed under newPin). Drop
+    // it; the next successful decrypt under newPin re-persists it.
+    await _forgetPin();
     return ChangePinResult(rotated: rotated, failed: failed);
   }
 
@@ -418,5 +473,6 @@ class CrudEngine {
     // (rotating the wallet, signing out of an account). Drop the cached PIN
     // so the next CRUD requires a fresh prompt.
     _pinCache.clear();
+    await _forgetPin();
   }
 }
