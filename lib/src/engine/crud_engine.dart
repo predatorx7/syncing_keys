@@ -73,6 +73,28 @@ class CrudEngine {
   @visibleForTesting
   PinCache get pinCacheForTest => _pinCache;
 
+  /// Serialises every interactive PIN / biometric prompt so two overlays can
+  /// never be on screen at once. Concurrent CRUD calls (e.g. several `getKey`
+  /// / `signHash` that fire together when the user taps "claim reward") queue
+  /// on this gate instead of each spawning their own sheet — which previously
+  /// stacked multiple PIN sheets and overlapping `local_auth` biometric
+  /// prompts. The tail of the chain represents the in-flight prompt, if any.
+  Future<void> _promptGate = Future<void>.value();
+
+  /// Runs [action] with exclusive access to the PIN prompt: it only starts
+  /// once any in-flight prompt has settled, and the gate is released when
+  /// [action] itself settles (success *or* error) so a failure can't wedge
+  /// the chain. Callers should re-check [_pinCache] inside [action] — by the
+  /// time they acquire the gate a prior prompt may already have cached a PIN,
+  /// in which case they reuse it rather than prompting again.
+  Future<T> _withPromptGate<T>(Future<T> Function() action) {
+    final result = _promptGate.then((_) => action());
+    // Chain the next waiter off this result, swallowing errors so one
+    // cancelled / failed prompt doesn't poison every queued caller.
+    _promptGate = result.then<void>((_) {}, onError: (_) {});
+    return result;
+  }
+
   /// Persists a known-good PIN for biometric unlock. Best-effort: a Keychain /
   /// Keystore write failure must never break the CRUD operation that produced
   /// the PIN, so we swallow errors here.
@@ -172,14 +194,21 @@ class CrudEngine {
     required Uint8List privateKey,
     required KeyType type,
   }) async {
+    // Fast path: a cached PIN needs no UI and no gate.
     final pin = _pinCache.get() ??
-        await PinEntryOverlay.show(
-          context: contextProvider(),
-          theme: config.pinTheme,
-          policy: config.pinPolicy,
-          strings: config.strings,
-          purpose: PinPurpose.encrypt,
-        );
+        await _withPromptGate<String>(() async {
+          // Re-check inside the gate — a concurrent prompt may have just
+          // cached a PIN while we were queued.
+          final cached = _pinCache.get();
+          if (cached != null) return cached;
+          return PinEntryOverlay.show(
+            context: contextProvider(),
+            theme: config.pinTheme,
+            policy: config.pinPolicy,
+            strings: config.strings,
+            purpose: PinPurpose.encrypt,
+          );
+        });
 
     final env = Envelope.seal(
       privateKey: privateKey,
@@ -258,7 +287,7 @@ class CrudEngine {
   /// Tries the cached PIN first; falls back to the overlay on cache miss or
   /// authentication failure. Up to 3 wrong-PIN attempts before we give up.
   Future<Uint8List> _openWithPinPrompt(Envelope env) async {
-    // 1) Cache attempt.
+    // 1) Cache attempt — no UI, no gate.
     final cached = _pinCache.get();
     if (cached != null) {
       try {
@@ -270,40 +299,56 @@ class CrudEngine {
       }
     }
 
-    // 2) Interactive prompt with retry.
-    String? errorMessage;
-    var attempts = 0;
-    while (true) {
-      final pin = await PinEntryOverlay.show(
-        context: contextProvider(),
-        theme: config.pinTheme,
-        strings: config.strings,
-        purpose: PinPurpose.decrypt,
-        errorMessage: errorMessage,
-        hasStoredPin: _biometricStore?.has,
-        readStoredPin: _biometricStore?.read,
-        // Auto-fire biometrics only on the first prompt; after a wrong PIN
-        // (errorMessage set) fall back to manual entry so a stale stored PIN
-        // can't loop.
-        autoPromptBiometric: errorMessage == null,
-      );
-      try {
-        final plain = env.open(pin);
-        _pinCache.set(pin);
-        await _rememberPin(pin);
-        return plain;
-      } on WrongPinException {
-        attempts += 1;
-        if (attempts >= 3) {
+    // 2) Interactive prompt with retry — serialised through the prompt gate so
+    // concurrent reads (e.g. a claim that triggers several signing calls at
+    // once) don't each pop their own sheet + biometric prompt. Whoever wins
+    // the gate prompts; everyone queued behind them re-checks the cache below
+    // and reuses the freshly-entered PIN instead of prompting again.
+    return _withPromptGate<Uint8List>(() async {
+      final c = _pinCache.get();
+      if (c != null) {
+        try {
+          return env.open(c);
+        } on WrongPinException {
           _pinCache.clear();
-          // The persisted PIN no longer opens this envelope (likely rotated on
-          // another device) — drop it so we stop offering a dead fingerprint.
-          await _forgetPin();
-          rethrow;
         }
-        errorMessage = config.strings.wrongPinRetry;
       }
-    }
+
+      String? errorMessage;
+      var attempts = 0;
+      while (true) {
+        final pin = await PinEntryOverlay.show(
+          context: contextProvider(),
+          theme: config.pinTheme,
+          strings: config.strings,
+          purpose: PinPurpose.decrypt,
+          errorMessage: errorMessage,
+          hasStoredPin: _biometricStore?.has,
+          readStoredPin: _biometricStore?.read,
+          // Auto-fire biometrics only on the first prompt; after a wrong PIN
+          // (errorMessage set) fall back to manual entry so a stale stored PIN
+          // can't loop.
+          autoPromptBiometric: errorMessage == null,
+        );
+        try {
+          final plain = env.open(pin);
+          _pinCache.set(pin);
+          await _rememberPin(pin);
+          return plain;
+        } on WrongPinException {
+          attempts += 1;
+          if (attempts >= 3) {
+            _pinCache.clear();
+            // The persisted PIN no longer opens this envelope (likely rotated
+            // on another device) — drop it so we stop offering a dead
+            // fingerprint.
+            await _forgetPin();
+            rethrow;
+          }
+          errorMessage = config.strings.wrongPinRetry;
+        }
+      }
+    });
   }
 
   /// Background pass — asks the platform for the cloud copy and, if its
