@@ -1,5 +1,15 @@
 ## 0.3.1
 
+Fix: `isKeySynced` (backup-status check) no longer reports "not backed up"
+after an app restart.
+
+It used to short-circuit on `isCloudAvailable()`, which on Android reflects an
+in-memory "authorized this session" flag (`drive.isReady()`) that resets to
+`false` on every cold start — so a freshly-launched app reported the key as not
+backed up until something else touched Drive. It now queries `listCloudIds()`
+directly, which performs a *silent* re-authorization (no UI) when the account
+already granted the scope, so the status is accurate across restarts.
+
 Fix: `getKey` now surfaces a missing cloud sign-in distinctly instead of a
 misleading "key not found".
 

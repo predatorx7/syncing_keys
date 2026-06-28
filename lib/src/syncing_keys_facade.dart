@@ -210,9 +210,23 @@ class SyncingKeys {
   /// yet (e.g. the key was created before the user signed in — call
   /// [syncKeyToCloud] to push it). No PIN prompt, no decryption.
   static Future<bool> isKeySynced(String id) async {
-    if (!await SyncingKeysPlatform.instance.isCloudAvailable()) return false;
-    final cloudIds = await SyncingKeysPlatform.instance.listCloudIds();
-    return cloudIds.contains(id);
+    // Don't gate on isCloudAvailable() — on Android that reflects an in-memory
+    // "authorized this session" flag (drive.isReady()) that resets to false on
+    // every cold start, so the backup badge would read "not backed up" after
+    // an app restart until something else touches Drive. listCloudIds()
+    // performs a *silent* re-authorization (no UI) when the account already
+    // granted the scope, so querying it directly reflects the true backup
+    // state across restarts. It returns empty (never throws) on Android when
+    // genuine sign-in is needed; we still guard defensively for other
+    // platforms.
+    try {
+      final cloudIds = await SyncingKeysPlatform.instance.listCloudIds();
+      return cloudIds.contains(id);
+    } on SyncingKeysException {
+      // Not signed in / re-auth required / cloud unreachable → treat as
+      // "not backed up" rather than surfacing an error to a status check.
+      return false;
+    }
   }
 
   /// Pushes the existing local envelope for [id] to the cloud, without needing
