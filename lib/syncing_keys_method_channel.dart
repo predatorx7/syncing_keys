@@ -51,6 +51,10 @@ class MethodChannelSyncingKeys extends SyncingKeysPlatform {
         // carries a useful enum-like value.
         final code = int.tryParse((e.details ?? '').toString()) ?? -1;
         return PlayServicesUnavailableException(code, e.message);
+      case 'CLOUD_REAUTH_REQUIRED':
+        return const CloudReauthRequiredException();
+      case 'CLOUD_UPLOAD_FAILED':
+        return CloudSyncException(e.message ?? 'Cloud upload failed.');
       default:
         return PlatformChannelException(e.code, e.message);
     }
@@ -72,11 +76,13 @@ class MethodChannelSyncingKeys extends SyncingKeysPlatform {
     required String id,
     required String blob,
     required bool syncToCloud,
+    bool awaitCloud = false,
   }) async {
     await _invoke<void>('storeBlob', <String, Object?>{
       'id': id,
       'blob': blob,
       'syncToCloud': syncToCloud,
+      'awaitCloud': awaitCloud,
     });
   }
 

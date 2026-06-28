@@ -260,6 +260,33 @@ Other behaviour worth knowing:
 - The cached session PIN is wiped on completion — the next CRUD call will
   prompt for the new PIN.
 
+### 5.5 Cloud backup status — `isKeySynced` / `syncKeyToCloud`
+
+Two helpers back a "is my key backed up?" surface (Drive `appDataFolder` on
+Android, iCloud Keychain on iOS). Neither prompts for a PIN — they only deal
+with the opaque encrypted envelope.
+
+```dart
+// Is there a cloud copy of this id right now?
+final backedUp = await SyncingKeys.isKeySynced('main');
+
+// Push the local envelope to the cloud (e.g. after the user signs in to a
+// cloud account that wasn't connected when the key was generated).
+if (!backedUp) {
+  await SyncingKeys.signInToCloud();   // Android: Google picker; iOS: no-op
+  await SyncingKeys.syncKeyToCloud('main');
+}
+```
+
+- `isKeySynced(id)` returns `false` when sync is disabled, no cloud account is
+  signed in, or the cloud doesn't hold `id` yet. It checks `isCloudAvailable()`
+  then looks for `id` in `listCloudIds()`.
+- `syncKeyToCloud(id)` re-uploads the existing local envelope with the cloud
+  flag set. It needs a signed-in cloud account and `syncEnabled: true`, and
+  throws `KeyNotFoundException` if there is no local envelope for `id`. It does
+  **not** need the PIN (the blob is already encrypted), so it's safe to call
+  from a backup button without a decrypt prompt.
+
 ### 5.4 Biometric (Face ID / fingerprint) unlock
 
 When a device has enrolled biometrics, the decrypt prompt leads with a Face ID

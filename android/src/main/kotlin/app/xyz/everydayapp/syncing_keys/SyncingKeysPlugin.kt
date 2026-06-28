@@ -348,6 +348,7 @@ class SyncingKeysPlugin :
         val id   = call.argument<String>("id")
         val blob = call.argument<String>("blob")
         val sync = call.argument<Boolean>("syncToCloud") ?: false
+        val awaitCloud = call.argument<Boolean>("awaitCloud") ?: false
         if (id == null || blob == null) {
             result.error("BAD_ARGS", "id and blob required", null); return
         }
@@ -359,7 +360,37 @@ class SyncingKeysPlugin :
             result.error("LOCAL_WRITE", t.message, t.stackTraceToString()); return
         }
 
-        // 2) Drive — fire-and-forget, but errors are surfaced through a log.
+        // 2a) Drive, awaited — for explicit "back up now" actions. Resolve the
+        //     MethodChannel result only once the upload lands (or report the
+        //     failure as a typed error so the caller can retry).
+        if (sync && awaitCloud) {
+            val d = drive
+            if (d == null) {
+                result.error("CLOUD_UPLOAD_FAILED",
+                    "Cloud backup is not available (no Drive/account).", null)
+                return
+            }
+            scope.launch {
+                try {
+                    d.upload(id, blob)
+                    withContext(Dispatchers.Main) { result.success(null) }
+                } catch (re: ReauthRequiredException) {
+                    pendingReauthSender = re.recoverySender
+                    withContext(Dispatchers.Main) {
+                        result.error("CLOUD_REAUTH_REQUIRED", re.message, null)
+                    }
+                } catch (t: Throwable) {
+                    android.util.Log.w("SyncingKeys",
+                        "Awaited Drive upload for ${redactId(id)} failed: ${t.message}", t)
+                    withContext(Dispatchers.Main) {
+                        result.error("CLOUD_UPLOAD_FAILED", t.message, t.stackTraceToString())
+                    }
+                }
+            }
+            return
+        }
+
+        // 2b) Drive — fire-and-forget, but errors are surfaced through a log.
         if (sync && drive != null) {
             scope.launch {
                 try {
@@ -394,10 +425,18 @@ class SyncingKeysPlugin :
         // so the Dart layer stays responsive and can show its loading dialog.
         if (allowCloud && syncEnabled && drive != null) {
             scope.launch {
+                var reauth: ReauthRequiredException? = null
                 val cloud = try {
                     drive!!.download(id)
                 } catch (re: ReauthRequiredException) {
+                    // Drive isn't authorized on this device (e.g. a fresh
+                    // install). Surface this DISTINCTLY rather than swallowing
+                    // it to null — otherwise the Dart layer can't tell "needs
+                    // cloud sign-in" apart from "no backup exists" and throws a
+                    // misleading KeyNotFoundException. The host app catches
+                    // CloudReauthRequiredException and calls signInToCloud().
                     pendingReauthSender = re.recoverySender
+                    reauth = re
                     android.util.Log.w("SyncingKeys",
                         "Drive download for ${redactId(id)} needs re-auth: ${re.message}", re)
                     null
@@ -408,13 +447,21 @@ class SyncingKeysPlugin :
                 }
 
                 withContext(Dispatchers.Main) {
-                    if (cloud != null) {
-                        // Cache the cloud copy back locally so subsequent
-                        // reads are offline-fast.
-                        try { localStore.put(id, cloud) } catch (_: Throwable) { /* best-effort */ }
-                        result.success(mapOf("blob" to cloud, "fromCloud" to true))
-                    } else {
-                        result.success(null)
+                    when {
+                        cloud != null -> {
+                            // Cache the cloud copy back locally so subsequent
+                            // reads are offline-fast.
+                            try { localStore.put(id, cloud) } catch (_: Throwable) { /* best-effort */ }
+                            result.success(mapOf("blob" to cloud, "fromCloud" to true))
+                        }
+                        reauth != null -> {
+                            result.error("CLOUD_REAUTH_REQUIRED", reauth!!.message, null)
+                        }
+                        else -> {
+                            // Genuinely absent in the cloud (404) — let Dart
+                            // throw KeyNotFoundException.
+                            result.success(null)
+                        }
                     }
                 }
             }

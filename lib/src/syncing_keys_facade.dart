@@ -201,4 +201,42 @@ class SyncingKeys {
   /// access will require a fresh [signInToCloud].
   static Future<void> signOutOfCloud() =>
       SyncingKeysPlatform.instance.signOutOfCloud();
+
+  /// Whether the envelope for [id] currently has a cloud copy (iCloud Keychain
+  /// on iOS, Drive `appDataFolder` on Android).
+  ///
+  /// Backs "is my key backed up?" UI. Returns `false` when sync is disabled,
+  /// no cloud account is signed in, or the cloud simply doesn't hold this id
+  /// yet (e.g. the key was created before the user signed in — call
+  /// [syncKeyToCloud] to push it). No PIN prompt, no decryption.
+  static Future<bool> isKeySynced(String id) async {
+    if (!await SyncingKeysPlatform.instance.isCloudAvailable()) return false;
+    final cloudIds = await SyncingKeysPlatform.instance.listCloudIds();
+    return cloudIds.contains(id);
+  }
+
+  /// Pushes the existing local envelope for [id] to the cloud, without needing
+  /// the PIN — it only moves the already-encrypted opaque blob. Use this to
+  /// back a "Sync now / back up" button for a key that was generated while the
+  /// user was signed out of their cloud account (so it never auto-uploaded).
+  ///
+  /// This **awaits the cloud upload**, so it resolves only once the blob is
+  /// actually on the cloud (Android Drive) — letting the caller report success
+  /// truthfully. It throws [CloudSyncException] / [CloudReauthRequiredException]
+  /// if the upload fails.
+  ///
+  /// Requires a signed-in cloud account ([signInToCloud]) and
+  /// [GlobalConfig.syncEnabled]. Throws [KeyNotFoundException] if there is no
+  /// local envelope for [id].
+  static Future<void> syncKeyToCloud(String id) async {
+    final lookup = await SyncingKeysPlatform.instance
+        .readBlob(id: id, allowCloudFallback: false);
+    if (lookup == null) throw KeyNotFoundException(id);
+    await SyncingKeysPlatform.instance.storeBlob(
+      id: id,
+      blob: lookup.blob,
+      syncToCloud: true,
+      awaitCloud: true,
+    );
+  }
 }

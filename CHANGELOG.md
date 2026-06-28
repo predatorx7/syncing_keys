@@ -1,3 +1,21 @@
+## 0.3.1
+
+Fix: `getKey` now surfaces a missing cloud sign-in distinctly instead of a
+misleading "key not found".
+
+Previously, on Android, when a cloud-fallback read needed Google Drive
+re-authorization (e.g. on a fresh install where Drive isn't authorized yet),
+the native `readBlob` handler swallowed `ReauthRequiredException` and returned
+`null`. The Dart layer then threw `KeyNotFoundException`, which is
+indistinguishable from "no backup exists" — so reinstalled users couldn't
+restore their key and saw a confusing error.
+
+Now the read path returns `result.error("CLOUD_REAUTH_REQUIRED", …)` (matching
+the existing `storeBlob`/`listIds` behaviour), so `getKey` throws
+`CloudReauthRequiredException`. Host apps should catch it and call
+`SyncingKeys.signInToCloud()` then retry. `KeyNotFoundException` is now thrown
+only when the blob is genuinely absent locally and in the cloud.
+
 ## 0.2.0 — 2026-06-22
 
 Biometric (Face ID / fingerprint) unlock now actually works, and the PIN

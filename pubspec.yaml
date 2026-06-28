@@ -1,6 +1,6 @@
 name: syncing_keys
 description: "SyncingKeys SDK — set-and-forget secure key management & cross-device sync for Starknet/Ethereum Flutter apps."
-version: 0.3.0
+version: 0.3.1
 homepage: https://github.com/everydayapp-xyz/syncing_keys
 
 environment:

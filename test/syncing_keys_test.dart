@@ -22,6 +22,7 @@ class FakeSyncingKeysPlatform extends SyncingKeysPlatform
     required String id,
     required String blob,
     required bool syncToCloud,
+    bool awaitCloud = false,
   }) async {
     local[id] = blob;
     if (syncToCloud) cloud[id] = blob;

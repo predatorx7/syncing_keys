@@ -100,6 +100,7 @@ class _FakePlatform extends SyncingKeysPlatform with MockPlatformInterfaceMixin 
     required String id,
     required String blob,
     required bool syncToCloud,
+    bool awaitCloud = false,
   }) async {
     local[id] = blob;
     if (syncToCloud) cloud[id] = blob;

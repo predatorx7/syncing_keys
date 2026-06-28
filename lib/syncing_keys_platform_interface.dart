@@ -29,10 +29,19 @@ abstract class SyncingKeysPlatform extends PlatformInterface {
   /// Store an opaque encrypted [blob] under [id]. If sync is enabled the
   /// native side is expected to also push the blob to iCloud (iOS) / Drive
   /// `appDataFolder` (Android).
+  ///
+  /// When [awaitCloud] is false (default) the call resolves as soon as the
+  /// local copy is durable; the cloud upload runs in the background. When
+  /// [awaitCloud] is true the call resolves only **after** the cloud upload
+  /// completes, and throws ([CloudSyncException] / [CloudReauthRequiredException])
+  /// if it fails. Use it to back an explicit "back up now" action that should
+  /// report success only once the cloud has the blob. On iOS this flag is a
+  /// no-op — the synchronizable Keychain item is queryable immediately.
   Future<void> storeBlob({
     required String id,
     required String blob,
     required bool syncToCloud,
+    bool awaitCloud = false,
   });
 
   /// Returns the stored blob for [id], or `null` if not found anywhere.
