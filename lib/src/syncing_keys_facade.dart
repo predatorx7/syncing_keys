@@ -3,10 +3,12 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 
 import '../syncing_keys_platform_interface.dart';
+import 'config/cloud_backend.dart';
 import 'config/global_config.dart';
 import 'engine/change_pin_result.dart';
 import 'engine/crud_engine.dart';
 import 'models/exceptions.dart';
+import 'models/key_conflict.dart';
 import 'models/key_metadata.dart';
 import 'models/key_type.dart';
 import 'models/stored_key.dart';
@@ -79,6 +81,16 @@ class SyncingKeys {
       iosKeychainGroup: config.iosKeychainGroup,
       syncEnabled: config.syncEnabled,
     );
+
+    // If a concrete backend was pinned in the config, push it to the native
+    // side. Left null, the platform keeps its default (iCloud on iOS, Drive on
+    // Android) — preserving the pre-[CloudBackend] behaviour.
+    if (config.cloudBackend != null) {
+      await SyncingKeysPlatform.instance.setRuntimeConfig(
+        syncEnabled: config.syncEnabled,
+        backend: config.cloudBackend,
+      );
+    }
 
     final BuildContext Function() resolver = contextProvider ??
         () {
@@ -175,6 +187,55 @@ class SyncingKeys {
   /// drop a key entirely use [deleteKey]. No-op when
   /// [GlobalConfig.biometricUnlockEnabled] is false.
   static Future<void> clearBiometricPin() => _e.clearBiometricPin();
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Runtime sync preference (backup on/off + which backend)
+  // ─────────────────────────────────────────────────────────────────────
+
+  /// Turn cloud backup on or off at runtime, without an app restart. When
+  /// enabling, the platform default backend is used unless a backend was set
+  /// via [setBackend]; when disabling, the SDK becomes a pure local store.
+  ///
+  /// This does **not** move any existing envelope — use [switchBackend] to
+  /// migrate the current key's cloud copy to a different backend.
+  static Future<void> setSyncEnabled(bool enabled) => _e.setRuntimeConfig(
+        syncEnabled: enabled,
+        backend: enabled ? null : CloudBackend.local,
+      );
+
+  /// Pin the cloud backend to [backend] at runtime. `local` is equivalent to
+  /// `setSyncEnabled(false)`. New writes go to this backend; existing copies
+  /// are not moved (use [switchBackend] for that).
+  static Future<void> setBackend(CloudBackend backend) => _e.setRuntimeConfig(
+        syncEnabled: backend.isCloud,
+        backend: backend,
+      );
+
+  /// Move the cloud backup for [id] to [backend], keeping the local device copy
+  /// intact, then make [backend] the active one. Uploads the current envelope
+  /// to the new backend and clears every other cloud copy so exactly one exists
+  /// (or none, for [CloudBackend.local]). Requires a signed-in cloud account
+  /// for a cloud target.
+  static Future<void> switchBackend(String id, CloudBackend backend) =>
+      _e.switchBackend(id, backend);
+
+  /// Compare the local key for [id] with its copy on the active cloud backend
+  /// and report whether they are genuinely different keys. See [KeyConflict].
+  ///
+  /// [promptIfNeeded] false runs a passive check that never pops the PIN sheet
+  /// (returns [KeyConflict.undetermined] if it can't decide from cache).
+  static Future<KeyConflict> checkConflict(String id,
+          {bool promptIfNeeded = true}) =>
+      _e.checkConflict(id, promptIfNeeded: promptIfNeeded);
+
+  /// Resolve a detected conflict by keeping one side and overwriting the other.
+  /// [backend] is the cloud backend reported by [checkConflict].
+  static Future<void> resolveConflict(
+    String id,
+    ConflictResolution keep,
+    CloudBackend backend,
+  ) =>
+      _e.resolveConflict(id, keep, backend);
 
   /// Whether the platform can currently talk to its cloud backend. Useful
   /// for "you're offline" UI hints. Returns `false` when sync is disabled.

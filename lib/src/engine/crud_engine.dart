@@ -4,12 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import '../../syncing_keys_platform_interface.dart';
+import '../config/cloud_backend.dart';
 import '../config/global_config.dart';
 import '../crypto/envelope.dart';
 import '../keygen/ethereum_key_generator.dart';
 import '../keygen/starknet_key_generator.dart';
 import '../models/exceptions.dart';
 import '../models/ids.dart';
+import '../models/key_conflict.dart';
 import '../models/key_metadata.dart';
 import '../models/key_type.dart';
 import '../models/stored_key.dart';
@@ -55,6 +57,32 @@ class CrudEngine {
             : null;
 
   final GlobalConfig config;
+
+  // ── Runtime-mutable sync state ─────────────────────────────────────────
+  // `syncEnabled` / `cloudBackend` start from [config] but can be changed at
+  // runtime via [setRuntimeConfig] without rebuilding the engine, so the user
+  // can turn backup on/off or switch backends from settings. Reads go through
+  // [_syncEnabled] / [_activeBackend] everywhere below.
+  bool? _syncEnabledOverride;
+  bool _backendOverridden = false;
+  CloudBackend? _backendOverride;
+
+  bool get _syncEnabled => _syncEnabledOverride ?? config.syncEnabled;
+  CloudBackend? get _activeBackend =>
+      _backendOverridden ? _backendOverride : config.cloudBackend;
+
+  /// Apply a new sync configuration at runtime. Pushes to the native side
+  /// first (so a failure there doesn't leave Dart and native disagreeing),
+  /// then records the override locally.
+  Future<void> setRuntimeConfig({
+    required bool syncEnabled,
+    CloudBackend? backend,
+  }) async {
+    await _platform.setRuntimeConfig(syncEnabled: syncEnabled, backend: backend);
+    _syncEnabledOverride = syncEnabled;
+    _backendOverride = backend;
+    _backendOverridden = true;
+  }
 
   /// The host app needs to give us a [BuildContext] to draw PIN UIs into.
   /// We accept a *provider* rather than a context directly because contexts
@@ -187,6 +215,18 @@ class CrudEngine {
         '${type.name} requires a $expected-byte private key, got ${bytes.length} bytes',
       );
     }
+    // For Starknet, additionally reject scalars outside the valid range
+    // `[1, n-1]` — an all-zero buffer or a value >= the curve order would seal
+    // into an envelope that can never produce a valid signature. secp256k1's
+    // range check is deferred to the signer, but the stark path is the one the
+    // import feature uses, so we guard it here.
+    if (type == KeyType.starknet && !StarknetKeyGenerator.isValidScalar(bytes)) {
+      throw ArgumentError.value(
+        bytes,
+        'privateKey',
+        'not a valid STARK private scalar (must be in [1, n-1])',
+      );
+    }
   }
 
   Future<void> _seal({
@@ -220,7 +260,7 @@ class CrudEngine {
     await _platform.storeBlob(
       id: id,
       blob: env.toBlob(),
-      syncToCloud: config.syncEnabled,
+      syncToCloud: _syncEnabled,
     );
     _pinCache.set(pin); // record after the platform write succeeded.
     // Persist for biometric unlock so the *next* getKey can be a fingerprint.
@@ -241,7 +281,7 @@ class CrudEngine {
 
     // Slow path — cloud round-trip with a visible loading state. We only
     // engage this if sync is enabled and the local store missed.
-    if (lookup == null && config.syncEnabled) {
+    if (lookup == null && _syncEnabled) {
       final dismiss = LoadingOverlay.show(
         contextProvider(),
         message: config.strings.fetchingFromCloud,
@@ -272,7 +312,7 @@ class CrudEngine {
     // This does not affect the current call's return value (we already
     // decrypted what we had); doing it lazily avoids a round-trip on every
     // read while still converging within one cycle.
-    if (config.syncEnabled && !lookup.fromCloud) {
+    if (_syncEnabled && !lookup.fromCloud) {
       unawaited(_reconcileLater(id: id, localEnv: env));
     }
 
@@ -374,6 +414,181 @@ class CrudEngine {
   }
 
   // ─────────────────────────────────────────────────────────────────────
+  // BACKEND SWITCH + CONFLICT
+  // ─────────────────────────────────────────────────────────────────────
+
+  static String _addressFor(KeyType type, Uint8List plain) => switch (type) {
+        KeyType.ethereum => EthereumKeyGenerator.addressFor(plain),
+        KeyType.starknet => StarknetKeyGenerator.publicAddressFor(plain),
+      };
+
+  static void _zero(Uint8List bytes) {
+    for (var i = 0; i < bytes.length; i++) {
+      bytes[i] = 0;
+    }
+  }
+
+  /// Move the cloud backup for [id] to [to], keeping the local device copy
+  /// intact (it is what signs). If [to] is a cloud backend the current local
+  /// envelope is uploaded there; every *other* cloud backend is then cleared so
+  /// exactly one cloud copy exists. If [to] is [CloudBackend.local] all cloud
+  /// copies are removed. Finishes by flipping the runtime config so subsequent
+  /// writes target the new backend.
+  Future<void> switchBackend(String id, CloudBackend to) async {
+    KeyId.validate(id);
+
+    if (to.isCloud) {
+      final local =
+          await _platform.readBlobFromBackend(id: id, backend: CloudBackend.local);
+      if (local != null) {
+        await _platform.writeBlobToBackend(id: id, blob: local.blob, backend: to);
+      }
+    }
+
+    // Ensure only `to` retains a cloud copy. Best-effort — a backend that isn't
+    // available on this platform simply has nothing to delete.
+    for (final b in CloudBackend.values) {
+      if (b == to || !b.isCloud) continue;
+      try {
+        await _platform.deleteBlobFromBackend(id: id, backend: b);
+      } catch (_) {
+        /* best-effort cleanup */
+      }
+    }
+
+    await setRuntimeConfig(syncEnabled: to.isCloud, backend: to);
+  }
+
+  /// Compare the local key for [id] against its copy on the active cloud
+  /// backend. See [KeyConflict] for what counts as a conflict.
+  ///
+  /// When [promptIfNeeded] is true (default) this may pop the PIN sheet to
+  /// decrypt and compare public addresses. When false it uses only a cached
+  /// (session-warm) PIN and, if none is cached, returns
+  /// [KeyConflict.undetermined] instead of prompting — use this for passive
+  /// background checks that must not surprise the user with a PIN sheet.
+  Future<KeyConflict> checkConflict(String id,
+      {bool promptIfNeeded = true}) async {
+    KeyId.validate(id);
+
+    // Figure out which cloud backend to compare against. Prefer the explicitly
+    // configured one; otherwise (config left at platform-default) scan the
+    // known cloud backends for one that actually holds a copy.
+    final backend = _activeBackend;
+    final List<CloudBackend> candidates;
+    if (backend != null && backend.isCloud) {
+      candidates = [backend];
+    } else if (_syncEnabled) {
+      candidates = CloudBackend.values.where((b) => b.isCloud).toList();
+    } else {
+      return const KeyConflict.none(CloudBackend.local);
+    }
+
+    final local =
+        await _platform.readBlobFromBackend(id: id, backend: CloudBackend.local);
+    if (local == null) {
+      return KeyConflict.none(candidates.first);
+    }
+
+    CloudBackend? cloudBackend;
+    BlobLookup? cloud;
+    for (final b in candidates) {
+      try {
+        final lookup = await _platform.readBlobFromBackend(id: id, backend: b);
+        if (lookup != null) {
+          cloudBackend = b;
+          cloud = lookup;
+          break;
+        }
+      } on CloudReauthRequiredException {
+        // Can't reach this backend without interactive sign-in — a passive
+        // conflict check should not force it. Skip.
+        continue;
+      }
+    }
+    if (cloud == null || cloudBackend == null) {
+      return KeyConflict.none(candidates.first);
+    }
+
+    // Byte-identical envelopes can't conflict.
+    if (local.blob == cloud.blob) return KeyConflict.none(cloudBackend);
+
+    final localEnv = Envelope.fromBlob(local.blob);
+    final cloudEnv = Envelope.fromBlob(cloud.blob);
+
+    // Decrypt local to learn its public address (and warm the PIN cache).
+    // Passive mode: use only a cached PIN, never prompt.
+    final Uint8List localPlain;
+    if (promptIfNeeded) {
+      localPlain = await _openWithPinPrompt(localEnv);
+    } else {
+      final cachedPin = _pinCache.get();
+      if (cachedPin == null) return KeyConflict.undetermined(cloudBackend);
+      try {
+        localPlain = localEnv.open(cachedPin);
+      } on WrongPinException {
+        // Cached PIN doesn't even open local — bail passively.
+        return KeyConflict.undetermined(cloudBackend);
+      }
+    }
+    final localPub = _addressFor(localEnv.type, localPlain);
+    _zero(localPlain);
+
+    // Try the cloud copy under the same PIN. If it opens to the same address
+    // it's just a benign re-seal (e.g. a PIN rotation) — not a conflict.
+    final pin = _pinCache.get();
+    String? cloudPub;
+    var cloudUndecryptable = false;
+    if (pin != null) {
+      try {
+        final cloudPlain = cloudEnv.open(pin);
+        cloudPub = _addressFor(cloudEnv.type, cloudPlain);
+        _zero(cloudPlain);
+      } on WrongPinException {
+        cloudUndecryptable = true;
+      }
+    } else {
+      cloudUndecryptable = true;
+    }
+
+    final hasConflict = cloudUndecryptable || cloudPub != localPub;
+    return KeyConflict(
+      hasConflict: hasConflict,
+      backend: cloudBackend,
+      localPublicAddress: localPub,
+      cloudPublicAddress: cloudPub,
+      localCreatedAtMs: localEnv.createdAtMs,
+      cloudCreatedAtMs: cloudEnv.createdAtMs,
+      cloudUndecryptable: cloudUndecryptable,
+    );
+  }
+
+  /// Resolve a conflict on [backend] by overwriting the loser. `keepLocal`
+  /// pushes the device copy up to the cloud; `keepCloud` pulls the cloud copy
+  /// down over local (and drops the cached PIN, since the cloud copy may be a
+  /// different PIN era).
+  Future<void> resolveConflict(
+    String id,
+    ConflictResolution keep,
+    CloudBackend backend,
+  ) async {
+    KeyId.validate(id);
+    if (keep == ConflictResolution.keepLocal) {
+      final local = await _platform.readBlobFromBackend(
+          id: id, backend: CloudBackend.local);
+      if (local == null) throw KeyNotFoundException(id);
+      await _platform.writeBlobToBackend(id: id, blob: local.blob, backend: backend);
+    } else {
+      final cloud = await _platform.readBlobFromBackend(id: id, backend: backend);
+      if (cloud == null) throw KeyNotFoundException(id);
+      await _platform.writeBlobToBackend(
+          id: id, blob: cloud.blob, backend: CloudBackend.local);
+      _pinCache.clear();
+      await _forgetPin();
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
   // DELETE
   // ─────────────────────────────────────────────────────────────────────
 
@@ -409,7 +624,7 @@ class CrudEngine {
     // proceed with whatever local has and surface the missing ones via
     // the result's `failed` list on the next attempt.
     final localIds = await _platform.listLocalIds();
-    final List<String> cloudIds = config.syncEnabled
+    final List<String> cloudIds = _syncEnabled
         ? await _platform.listCloudIds().catchError(
             (Object _) => const <String>[],
           )
@@ -425,7 +640,7 @@ class CrudEngine {
     // first id and fall through to the cloud lookup if it's cloud-only.
     final probe = await _platform.readBlob(
       id: ids.first,
-      allowCloudFallback: config.syncEnabled,
+      allowCloudFallback: _syncEnabled,
     );
     if (probe == null) {
       // Race — id list said it existed but the row vanished. Treat as no-op.
@@ -441,7 +656,7 @@ class CrudEngine {
       try {
         final lookup = await _platform.readBlob(
           id: id,
-          allowCloudFallback: config.syncEnabled,
+          allowCloudFallback: _syncEnabled,
         );
         if (lookup == null) continue;
         final env = Envelope.fromBlob(lookup.blob);
@@ -456,7 +671,7 @@ class CrudEngine {
           await _platform.storeBlob(
             id: id,
             blob: resealed.toBlob(),
-            syncToCloud: config.syncEnabled,
+            syncToCloud: _syncEnabled,
           );
           rotated.add(id);
         } finally {
@@ -512,7 +727,7 @@ class CrudEngine {
     KeyId.validate(id);
     await _platform.deleteBlob(
       id: id,
-      deleteFromCloud: config.syncEnabled,
+      deleteFromCloud: _syncEnabled,
     );
     // Best-practice: a deleteKey often signals a security-relevant action
     // (rotating the wallet, signing out of an account). Drop the cached PIN

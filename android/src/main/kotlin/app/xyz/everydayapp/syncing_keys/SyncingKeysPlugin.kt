@@ -150,9 +150,13 @@ class SyncingKeysPlugin :
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "configure" -> handleConfigure(call, result)
+            "setRuntimeConfig" -> handleSetRuntimeConfig(call, result)
             "storeBlob" -> handleStoreBlob(call, result)
             "readBlob"  -> handleReadBlob(call, result)
             "deleteBlob" -> handleDeleteBlob(call, result)
+            "readBlobFromBackend" -> handleReadBlobFromBackend(call, result)
+            "writeBlobToBackend" -> handleWriteBlobToBackend(call, result)
+            "deleteBlobFromBackend" -> handleDeleteBlobFromBackend(call, result)
             "listLocalIds" -> {
                 try { result.success(localStore.listIds()) }
                 catch (t: Throwable) { result.error("LOCAL_LIST", t.message, t.stackTraceToString()) }
@@ -200,6 +204,129 @@ class SyncingKeysPlugin :
         syncEnabled    = call.argument<Boolean>("syncEnabled") ?: false
         rebuildDrive()
         result.success(null)
+    }
+
+    /**
+     * Runtime mutation of the sync configuration (backup on/off). The `backend`
+     * arg is accepted for parity with iOS but is informational on Android —
+     * Google Drive is the only cloud backend here, so `syncEnabled` fully
+     * determines behaviour.
+     */
+    private fun handleSetRuntimeConfig(call: MethodCall, result: MethodChannel.Result) {
+        syncEnabled = call.argument<Boolean>("syncEnabled") ?: false
+        rebuildDrive()
+        result.success(null)
+    }
+
+    // ─────────────── per-backend primitives (migration / conflict) ───────────
+    //
+    // Android has exactly two backends: `local` (EncryptedSharedPreferences) and
+    // `googleDrive`. `appleKeychain` is iOS-only and is treated as "absent" here
+    // so the shared Dart logic can iterate backends uniformly.
+
+    private fun handleReadBlobFromBackend(call: MethodCall, result: MethodChannel.Result) {
+        val id = call.argument<String>("id")
+        val backend = call.argument<String>("backend")
+        if (id == null) { result.error("BAD_ARGS", "id required", null); return }
+
+        when (backend) {
+            "local" -> {
+                val local = localStore.get(id)
+                if (local != null) result.success(mapOf("blob" to local, "fromCloud" to false))
+                else result.success(null)
+            }
+            "googleDrive" -> {
+                val d = drive
+                if (d == null) { result.success(null); return }
+                scope.launch {
+                    var reauth: ReauthRequiredException? = null
+                    val cloud = try {
+                        d.download(id)
+                    } catch (re: ReauthRequiredException) {
+                        pendingReauthSender = re.recoverySender
+                        reauth = re
+                        null
+                    } catch (t: Throwable) {
+                        android.util.Log.w("SyncingKeys",
+                            "Drive read-from-backend for ${redactId(id)} failed: ${t.message}", t)
+                        null
+                    }
+                    withContext(Dispatchers.Main) {
+                        when {
+                            cloud != null -> result.success(mapOf("blob" to cloud, "fromCloud" to true))
+                            reauth != null -> result.error("CLOUD_REAUTH_REQUIRED", reauth!!.message, null)
+                            else -> result.success(null)
+                        }
+                    }
+                }
+            }
+            else -> result.success(null) // appleKeychain / unknown → not on this platform.
+        }
+    }
+
+    private fun handleWriteBlobToBackend(call: MethodCall, result: MethodChannel.Result) {
+        val id = call.argument<String>("id")
+        val blob = call.argument<String>("blob")
+        val backend = call.argument<String>("backend")
+        if (id == null || blob == null) { result.error("BAD_ARGS", "id and blob required", null); return }
+
+        when (backend) {
+            "local" -> {
+                try { localStore.put(id, blob); result.success(null) }
+                catch (t: Throwable) { result.error("LOCAL_WRITE", t.message, t.stackTraceToString()) }
+            }
+            "googleDrive" -> {
+                val d = drive
+                if (d == null) {
+                    result.error("CLOUD_UPLOAD_FAILED", "Cloud backup is not available (no Drive/account).", null)
+                    return
+                }
+                scope.launch {
+                    try {
+                        d.upload(id, blob)
+                        withContext(Dispatchers.Main) { result.success(null) }
+                    } catch (re: ReauthRequiredException) {
+                        pendingReauthSender = re.recoverySender
+                        withContext(Dispatchers.Main) { result.error("CLOUD_REAUTH_REQUIRED", re.message, null) }
+                    } catch (t: Throwable) {
+                        withContext(Dispatchers.Main) { result.error("CLOUD_UPLOAD_FAILED", t.message, t.stackTraceToString()) }
+                    }
+                }
+            }
+            else -> result.error("UNSUPPORTED", "Backend '$backend' is not available on Android.", null)
+        }
+    }
+
+    private fun handleDeleteBlobFromBackend(call: MethodCall, result: MethodChannel.Result) {
+        val id = call.argument<String>("id")
+        val backend = call.argument<String>("backend")
+        if (id == null) { result.error("BAD_ARGS", "id required", null); return }
+
+        when (backend) {
+            "local" -> {
+                try { localStore.delete(id); result.success(null) }
+                catch (t: Throwable) { result.error("LOCAL_DELETE", t.message, t.stackTraceToString()) }
+            }
+            "googleDrive" -> {
+                val d = drive
+                if (d == null) { result.success(null); return }
+                scope.launch {
+                    try {
+                        d.delete(id)
+                        withContext(Dispatchers.Main) { result.success(null) }
+                    } catch (re: ReauthRequiredException) {
+                        pendingReauthSender = re.recoverySender
+                        withContext(Dispatchers.Main) { result.error("CLOUD_REAUTH_REQUIRED", re.message, null) }
+                    } catch (t: Throwable) {
+                        android.util.Log.w("SyncingKeys",
+                            "Drive delete-from-backend for ${redactId(id)} failed: ${t.message}", t)
+                        // Best-effort: a delete that fails to reach Drive shouldn't wedge a switch.
+                        withContext(Dispatchers.Main) { result.success(null) }
+                    }
+                }
+            }
+            else -> result.success(null)
+        }
     }
 
     /**

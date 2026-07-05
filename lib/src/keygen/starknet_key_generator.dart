@@ -55,6 +55,21 @@ class StarknetKeyGenerator {
     );
   }
 
+  /// The order `n` of the STARK curve generator. A valid private scalar is in
+  /// `[1, n-1]`.
+  static final BigInt curveOrder = BigInt.parse(
+      '0800000000000010ffffffffffffffffb781126dcae7b2321e66a241adc64d2f',
+      radix: 16);
+
+  /// Whether [privKey]'s 32 big-endian bytes are a valid STARK private scalar
+  /// (`0 < d < n`). Used to reject a malformed imported key before it is sealed
+  /// into an envelope that could never sign.
+  static bool isValidScalar(Uint8List privKey) {
+    if (privKey.length != 32) return false;
+    final d = _bytesToBigInt(privKey);
+    return d > BigInt.zero && d < curveOrder;
+  }
+
   /// Re-derive the public address for an existing private key (used after a
   /// cloud restore + decrypt to populate the returned [StoredKey]).
   static String publicAddressFor(Uint8List privKey) {

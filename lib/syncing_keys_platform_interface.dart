@@ -1,5 +1,6 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
+import 'src/config/cloud_backend.dart';
 import 'syncing_keys_method_channel.dart';
 
 /// Platform-interface contract that the iOS and Android implementations
@@ -25,6 +26,56 @@ abstract class SyncingKeysPlatform extends PlatformInterface {
     String? iosKeychainGroup,
     required bool syncEnabled,
   });
+
+  /// Mutate the sync configuration at runtime, without an app restart. The
+  /// native side stores these in the same instance state it already checks
+  /// per-CRUD-call, so the change takes effect on the next operation.
+  ///
+  /// Prefer calling this from the Dart facade ([SyncingKeys.setSyncEnabled] /
+  /// [SyncingKeys.setBackend]) which also keeps the in-memory config in sync.
+  ///
+  /// Has a default implementation that throws so pre-existing fake platforms in
+  /// tests keep compiling; real platforms override it.
+  Future<void> setRuntimeConfig({
+    required bool syncEnabled,
+    CloudBackend? backend,
+  }) {
+    throw UnimplementedError('setRuntimeConfig() has not been implemented.');
+  }
+
+  /// Read the envelope for [id] from **one specific backend**, bypassing the
+  /// normal local-first fallback. Returns `null` when that backend has no copy.
+  ///
+  /// This is the seam behind cross-backend migration and conflict detection:
+  /// it lets the Dart layer fetch the local copy and a specific cloud copy
+  /// independently so it can compare them. Reading a cloud backend may trigger
+  /// a silent re-auth; it throws [CloudReauthRequiredException] if interactive
+  /// sign-in is required.
+  Future<BlobLookup?> readBlobFromBackend({
+    required String id,
+    required CloudBackend backend,
+  }) {
+    throw UnimplementedError('readBlobFromBackend() has not been implemented.');
+  }
+
+  /// Write [blob] for [id] into **one specific backend**, without touching the
+  /// others. Used by migration/conflict-resolution to place a copy on a chosen
+  /// backend. For [CloudBackend.local] this writes the on-device copy.
+  Future<void> writeBlobToBackend({
+    required String id,
+    required String blob,
+    required CloudBackend backend,
+  }) {
+    throw UnimplementedError('writeBlobToBackend() has not been implemented.');
+  }
+
+  /// Delete [id] from **one specific backend**. Idempotent.
+  Future<void> deleteBlobFromBackend({
+    required String id,
+    required CloudBackend backend,
+  }) {
+    throw UnimplementedError('deleteBlobFromBackend() has not been implemented.');
+  }
 
   /// Store an opaque encrypted [blob] under [id]. If sync is enabled the
   /// native side is expected to also push the blob to iCloud (iOS) / Drive

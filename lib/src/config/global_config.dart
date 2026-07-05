@@ -1,3 +1,4 @@
+import 'cloud_backend.dart';
 import 'pin_policy.dart';
 import 'pin_theme.dart';
 import 'syncing_keys_strings.dart';
@@ -10,6 +11,7 @@ class GlobalConfig {
   const GlobalConfig({
     this.iosKeychainGroup,
     this.syncEnabled = false,
+    this.cloudBackend,
     this.pinTheme = const PinTheme(),
     this.pinPolicy = const PinPolicy(),
     this.strings = const SyncingKeysStrings(),
@@ -36,6 +38,17 @@ class GlobalConfig {
   /// one Android OAuth client per signing cert (debug, upload, Play App
   /// Signing) in Google Cloud Console and re-download `google-services.json`.
   final bool syncEnabled;
+
+  /// Which cloud backend to use when [syncEnabled] is true.
+  ///
+  /// When `null` the native side picks its platform default (iCloud Keychain on
+  /// iOS, Google Drive on Android) — this preserves the pre-[CloudBackend]
+  /// behaviour. Pass a concrete value to pin the choice, or drive it from a
+  /// user preference. It can also be changed at runtime via
+  /// [SyncingKeys.setBackend] / [SyncingKeys.switchBackend] without an app
+  /// restart. A value of [CloudBackend.local] is equivalent to
+  /// `syncEnabled == false`.
+  final CloudBackend? cloudBackend;
 
   /// Visual theme for the PIN entry overlay.
   final PinTheme pinTheme;
@@ -73,6 +86,7 @@ class GlobalConfig {
       other is GlobalConfig &&
           other.iosKeychainGroup == iosKeychainGroup &&
           other.syncEnabled == syncEnabled &&
+          other.cloudBackend == cloudBackend &&
           other.pinTheme == pinTheme &&
           other.pinPolicy == pinPolicy &&
           other.strings == strings &&
@@ -84,6 +98,7 @@ class GlobalConfig {
   int get hashCode => Object.hash(
         iosKeychainGroup,
         syncEnabled,
+        cloudBackend,
         pinTheme,
         pinPolicy,
         strings,

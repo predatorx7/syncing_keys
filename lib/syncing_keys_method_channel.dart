@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'src/config/cloud_backend.dart';
 import 'src/models/exceptions.dart';
 import 'syncing_keys_platform_interface.dart';
 
@@ -68,6 +69,57 @@ class MethodChannelSyncingKeys extends SyncingKeysPlatform {
     await _invoke<void>('configure', <String, Object?>{
       'iosKeychainGroup': iosKeychainGroup,
       'syncEnabled': syncEnabled,
+    });
+  }
+
+  @override
+  Future<void> setRuntimeConfig({
+    required bool syncEnabled,
+    CloudBackend? backend,
+  }) async {
+    await _invoke<void>('setRuntimeConfig', <String, Object?>{
+      'syncEnabled': syncEnabled,
+      'backend': backend?.name,
+    });
+  }
+
+  @override
+  Future<BlobLookup?> readBlobFromBackend({
+    required String id,
+    required CloudBackend backend,
+  }) async {
+    final result = await _invokeMap('readBlobFromBackend', <String, Object?>{
+      'id': id,
+      'backend': backend.name,
+    });
+    if (result == null || result['blob'] == null) return null;
+    return BlobLookup(
+      blob: result['blob'] as String,
+      fromCloud: (result['fromCloud'] as bool?) ?? backend.isCloud,
+    );
+  }
+
+  @override
+  Future<void> writeBlobToBackend({
+    required String id,
+    required String blob,
+    required CloudBackend backend,
+  }) async {
+    await _invoke<void>('writeBlobToBackend', <String, Object?>{
+      'id': id,
+      'blob': blob,
+      'backend': backend.name,
+    });
+  }
+
+  @override
+  Future<void> deleteBlobFromBackend({
+    required String id,
+    required CloudBackend backend,
+  }) async {
+    await _invoke<void>('deleteBlobFromBackend', <String, Object?>{
+      'id': id,
+      'backend': backend.name,
     });
   }
 

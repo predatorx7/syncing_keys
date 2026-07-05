@@ -11,10 +11,12 @@ library;
 
 export 'src/syncing_keys_facade.dart';
 export 'src/config/global_config.dart';
+export 'src/config/cloud_backend.dart';
 export 'src/config/pin_theme.dart';
 export 'src/models/key_type.dart';
 export 'src/models/stored_key.dart';
 export 'src/models/key_metadata.dart';
+export 'src/models/key_conflict.dart';
 export 'src/models/exceptions.dart';
 export 'src/config/pin_policy.dart';
 export 'src/config/syncing_keys_strings.dart';

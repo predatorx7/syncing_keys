@@ -45,6 +45,66 @@ public class SyncingKeysPlugin: NSObject, FlutterPlugin {
             self.syncEnabled = (args["syncEnabled"] as? Bool) ?? false
             result(nil)
 
+        case "setRuntimeConfig":
+            // Runtime backup on/off. `backend` is accepted for parity; on iOS the
+            // cloud backend is iCloud Keychain (Google Drive lands in a later
+            // phase), so `syncEnabled` fully determines behaviour today.
+            let args = call.arguments as? [String: Any?] ?? [:]
+            self.syncEnabled = (args["syncEnabled"] as? Bool) ?? false
+            result(nil)
+
+        case "readBlobFromBackend":
+            guard let args = call.arguments as? [String: Any?],
+                  let id   = args["id"] as? String else {
+                result(self.argError("readBlobFromBackend")); return
+            }
+            guard let syncFlag = self.keychainSyncFlag(for: args["backend"] as? String) else {
+                // googleDrive / unknown → not available on iOS yet.
+                result(nil); return
+            }
+            do {
+                if let blob = try read(id: id, syncFlag: syncFlag) {
+                    result(["blob": blob, "fromCloud": syncFlag])
+                } else {
+                    result(nil)
+                }
+            } catch {
+                result(self.flutterError("readBlobFromBackend", error))
+            }
+
+        case "writeBlobToBackend":
+            guard let args = call.arguments as? [String: Any?],
+                  let id   = args["id"]   as? String,
+                  let blob = args["blob"] as? String else {
+                result(self.argError("writeBlobToBackend")); return
+            }
+            guard let syncFlag = self.keychainSyncFlag(for: args["backend"] as? String) else {
+                result(FlutterError(code: "UNSUPPORTED",
+                                    message: "Backend '\(args["backend"] as? String ?? "nil")' is not available on iOS.",
+                                    details: nil)); return
+            }
+            do {
+                try store(id: id, blob: blob, sync: syncFlag)
+                result(nil)
+            } catch {
+                result(self.flutterError("writeBlobToBackend", error))
+            }
+
+        case "deleteBlobFromBackend":
+            guard let args = call.arguments as? [String: Any?],
+                  let id   = args["id"] as? String else {
+                result(self.argError("deleteBlobFromBackend")); return
+            }
+            guard let syncFlag = self.keychainSyncFlag(for: args["backend"] as? String) else {
+                result(nil); return
+            }
+            do {
+                try delete(id: id, syncFlag: syncFlag)
+                result(nil)
+            } catch {
+                result(self.flutterError("deleteBlobFromBackend", error))
+            }
+
         case "storeBlob":
             guard let args = call.arguments as? [String: Any?],
                   let id   = args["id"]   as? String,
@@ -148,6 +208,18 @@ public class SyncingKeysPlugin: NSObject, FlutterPlugin {
 
         default:
             result(FlutterMethodNotImplemented)
+        }
+    }
+
+    /// Maps a [CloudBackend] wire name to the Keychain `synchronizable` flag,
+    /// or `nil` when the backend has no Keychain representation on iOS
+    /// (`googleDrive`, or an unknown/forward-incompatible value). `local` is the
+    /// device-only row; `appleKeychain` is the iCloud-synchronized row.
+    private func keychainSyncFlag(for backend: String?) -> Bool? {
+        switch backend {
+        case "local":         return false
+        case "appleKeychain": return true
+        default:              return nil
         }
     }
 
