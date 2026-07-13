@@ -103,6 +103,61 @@ void main() {
       expect(r.fake.stores['local']!['main'], seeded.blob);
       expect(r.fake.syncEnabled, isFalse);
     });
+
+    test('switching to local RESCUES a cloud-only key before deleting it',
+        () async {
+      // The 1.5.x loss shape: the key lives only on the cloud row (no local
+      // copy). Switching to "no backup" must copy it down first, not delete
+      // the only copy.
+      final r = buildEngine();
+      final seeded = sealScalar(11);
+      r.fake.stores['googleDrive']!['main'] = seeded.blob;
+      // local intentionally empty.
+
+      await r.engine.switchBackend('main', CloudBackend.local);
+
+      expect(r.fake.stores['local']!['main'], seeded.blob,
+          reason: 'key rescued to local before cloud copy removed');
+      expect(r.fake.stores['googleDrive'], isEmpty);
+    });
+  });
+
+  group('getKeyFromBackend', () {
+    test('returns the decrypted key stored on a specific backend', () async {
+      final r = buildEngine();
+      final local = sealScalar(5);
+      final cloud = sealScalar(7);
+      r.fake.stores['local']!['main'] = local.blob;
+      r.fake.stores['googleDrive']!['main'] = cloud.blob;
+
+      final fromCloud =
+          await r.engine.getKeyFromBackend('main', CloudBackend.googleDrive);
+      expect(fromCloud.publicAddress, cloud.pubkey);
+      final fromLocal =
+          await r.engine.getKeyFromBackend('main', CloudBackend.local);
+      expect(fromLocal.publicAddress, local.pubkey);
+    });
+
+    test('throws KeyNotFound when the backend has no copy', () async {
+      final r = buildEngine();
+      await expectLater(
+        () => r.engine.getKeyFromBackend('main', CloudBackend.googleDrive),
+        throwsA(isA<KeyNotFoundException>()),
+      );
+    });
+  });
+
+  group('listKeys', () {
+    test('unions cloud-only ids so a stranded key is still listed', () async {
+      final r = buildEngine();
+      // Key exists ONLY on the cloud row (local store empty).
+      r.fake.stores['googleDrive']!['main'] = sealScalar(5).blob;
+
+      final keys = await r.engine.listKeys();
+      expect(keys.map((k) => k.id), contains('main'));
+      // Side-effect: the fallback read caches it back to local (self-heal).
+      expect(r.fake.stores['local']!['main'], isNotNull);
+    });
   });
 
   group('checkConflict', () {

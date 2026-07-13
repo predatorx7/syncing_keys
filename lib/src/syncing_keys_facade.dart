@@ -228,6 +228,14 @@ class SyncingKeys {
           {bool promptIfNeeded = true}) =>
       _e.checkConflict(id, promptIfNeeded: promptIfNeeded);
 
+  /// Decrypt and return the copy of [id] stored on [backend] (either side of a
+  /// conflict, including [CloudBackend.local]). The PIN sheet may pop — the
+  /// envelope can be sealed under a different PIN than the cached one. Use
+  /// this to export/back up the losing side's key before [resolveConflict]
+  /// overwrites it. Call [StoredKey.dispose] when done.
+  static Future<StoredKey> getKeyFromBackend(String id, CloudBackend backend) =>
+      _e.getKeyFromBackend(id, backend);
+
   /// Resolve a detected conflict by keeping one side and overwriting the other.
   /// [backend] is the cloud backend reported by [checkConflict].
   static Future<void> resolveConflict(

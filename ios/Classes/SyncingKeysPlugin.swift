@@ -113,7 +113,15 @@ public class SyncingKeysPlugin: NSObject, FlutterPlugin {
             }
             let syncToCloud = (args["syncToCloud"] as? Bool) ?? false
             do {
-                try store(id: id, blob: blob, sync: syncToCloud)
+                // Always write the device-only row — it is the copy `readBlob`'s
+                // fast path and `listLocalIds` see. A key that exists ONLY on the
+                // synchronizable row becomes invisible the moment sync is turned
+                // off (the two rows are distinct keychain items), which is how
+                // users lost wallets in the 1.5.x cycle.
+                try store(id: id, blob: blob, sync: false)
+                if syncToCloud {
+                    try store(id: id, blob: blob, sync: true)
+                }
                 result(nil)
             } catch {
                 result(self.flutterError("storeBlob", error)); return
@@ -129,7 +137,10 @@ public class SyncingKeysPlugin: NSObject, FlutterPlugin {
                 if let local = try read(id: id, syncFlag: false) {
                     result(["blob": local, "fromCloud": false]); return
                 }
-                if allowCloud && self.syncEnabled,
+                // Deliberately NOT gated on self.syncEnabled: the synchronizable
+                // row lives in the on-device keychain, so reading it is free and
+                // rescues keys stranded there by an earlier sync-off switch.
+                if allowCloud,
                    let cloud = try read(id: id, syncFlag: true) {
                     // Best-effort: cache the cloud copy back to a non-sync
                     // local row so the next read is offline-fast. The cloud
@@ -155,10 +166,9 @@ public class SyncingKeysPlugin: NSObject, FlutterPlugin {
             // by SecItemCopyMatching with kSecAttrSynchronizable=true. On a
             // brand-new device the iCloud Keychain bridge populates these
             // rows in the background; we simply query whatever's currently
-            // visible. The Dart layer dedups against listLocalIds.
-            if !self.syncEnabled {
-                result([] as [String]); return
-            }
+            // visible. The Dart layer dedups against listLocalIds. Not gated on
+            // self.syncEnabled — the query is local and enumerating stranded
+            // sync-row keys is exactly how orphaned wallets get found again.
             do {
                 result(try self.listIds(syncFlag: true))
             } catch {

@@ -279,20 +279,31 @@ class CrudEngine {
       allowCloudFallback: false,
     );
 
-    // Slow path — cloud round-trip with a visible loading state. We only
-    // engage this if sync is enabled and the local store missed.
-    if (lookup == null && _syncEnabled) {
-      final dismiss = LoadingOverlay.show(
-        contextProvider(),
-        message: config.strings.fetchingFromCloud,
-      );
-      try {
+    // Slow path — fall back to the cloud/synchronizable copy. This runs even
+    // when sync is disabled: on iOS the synchronizable keychain row is
+    // on-device (a key stranded there by a sync-off switch must stay
+    // reachable), and on Android the platform side itself no-ops when Drive
+    // isn't active. The loading overlay only shows when sync is on, since
+    // that's the only case with a real network round-trip.
+    if (lookup == null) {
+      if (_syncEnabled) {
+        final dismiss = LoadingOverlay.show(
+          contextProvider(),
+          message: config.strings.fetchingFromCloud,
+        );
+        try {
+          lookup = await _platform.readBlob(
+            id: id,
+            allowCloudFallback: true,
+          );
+        } finally {
+          dismiss();
+        }
+      } else {
         lookup = await _platform.readBlob(
           id: id,
           allowCloudFallback: true,
         );
-      } finally {
-        dismiss();
       }
     }
 
@@ -437,12 +448,32 @@ class CrudEngine {
   Future<void> switchBackend(String id, CloudBackend to) async {
     KeyId.validate(id);
 
-    if (to.isCloud) {
-      final local =
-          await _platform.readBlobFromBackend(id: id, backend: CloudBackend.local);
-      if (local != null) {
-        await _platform.writeBlobToBackend(id: id, blob: local.blob, backend: to);
+    var local =
+        await _platform.readBlobFromBackend(id: id, backend: CloudBackend.local);
+
+    // If the device-only row is missing (key stranded on a cloud backend),
+    // rescue it to local BEFORE any cloud copy is deleted — otherwise
+    // switching to `local` deletes the only copy of the key.
+    if (local == null) {
+      for (final b in CloudBackend.values) {
+        if (!b.isCloud) continue;
+        try {
+          final lookup =
+              await _platform.readBlobFromBackend(id: id, backend: b);
+          if (lookup != null) {
+            await _platform.writeBlobToBackend(
+                id: id, blob: lookup.blob, backend: CloudBackend.local);
+            local = lookup;
+            break;
+          }
+        } on CloudReauthRequiredException {
+          continue;
+        }
       }
+    }
+
+    if (to.isCloud && local != null) {
+      await _platform.writeBlobToBackend(id: id, blob: local.blob, backend: to);
     }
 
     // Ensure only `to` retains a cloud copy. Best-effort — a backend that isn't
@@ -478,10 +509,11 @@ class CrudEngine {
     final List<CloudBackend> candidates;
     if (backend != null && backend.isCloud) {
       candidates = [backend];
-    } else if (_syncEnabled) {
-      candidates = CloudBackend.values.where((b) => b.isCloud).toList();
     } else {
-      return const KeyConflict.none(CloudBackend.local);
+      // Scan every cloud backend even when sync is disabled — a differing
+      // copy stranded on one is exactly the state that silently loses a
+      // wallet if it stays invisible. Unreachable backends are skipped.
+      candidates = CloudBackend.values.where((b) => b.isCloud).toList();
     }
 
     final local =
@@ -560,6 +592,26 @@ class CrudEngine {
       localCreatedAtMs: localEnv.createdAtMs,
       cloudCreatedAtMs: cloudEnv.createdAtMs,
       cloudUndecryptable: cloudUndecryptable,
+    );
+  }
+
+  /// Decrypt and return the copy of [id] stored on [backend]. The PIN sheet
+  /// may pop — the envelope can be sealed under a different PIN than the
+  /// cached one (that's the typical conflict case). Use this to let the user
+  /// export/back up the losing side's private key *before*
+  /// [resolveConflict] overwrites it.
+  Future<StoredKey> getKeyFromBackend(String id, CloudBackend backend) async {
+    KeyId.validate(id);
+    final lookup =
+        await _platform.readBlobFromBackend(id: id, backend: backend);
+    if (lookup == null) throw KeyNotFoundException(id);
+    final env = Envelope.fromBlob(lookup.blob);
+    final plain = await _openWithPinPrompt(env);
+    return StoredKey(
+      id: id,
+      type: env.type,
+      privateKey: plain,
+      publicAddress: _addressFor(env.type, plain),
     );
   }
 
@@ -700,10 +752,27 @@ class CrudEngine {
   /// via the platform's own logger). This avoids one corrupted blob taking
   /// down the entire listing.
   Future<List<KeyMetadata>> listKeys() async {
-    final ids = await _platform.listLocalIds();
+    final localIds = await _platform.listLocalIds();
+    // Union in ids visible on the cloud/synchronizable side so a key whose
+    // device-only row is missing (stranded by an earlier sync-off switch, or
+    // not yet cached after a reinstall) still shows up. Best-effort — an
+    // unreachable backend must not take down the listing.
+    List<String> cloudIds = const [];
+    try {
+      cloudIds = await _platform.listCloudIds();
+    } catch (_) {
+      /* offline / not signed in — list what local has. */
+    }
+    final ids = <String>{...localIds, ...cloudIds};
     final out = <KeyMetadata>[];
     for (final id in ids) {
-      final lookup = await _platform.readBlob(id: id, allowCloudFallback: false);
+      // For cloud-only ids allow the fallback read — as a side-effect the
+      // platform caches the blob back to the local row, self-healing the
+      // stranded state.
+      final lookup = await _platform.readBlob(
+        id: id,
+        allowCloudFallback: !localIds.contains(id),
+      );
       if (lookup == null) continue;
       try {
         final env = Envelope.fromBlob(lookup.blob);
@@ -725,9 +794,12 @@ class CrudEngine {
 
   Future<void> deleteKey(String id) async {
     KeyId.validate(id);
+    // An explicit delete must remove every copy regardless of the runtime
+    // sync flag — leaving the synchronizable row behind would resurrect the
+    // "invisible orphan key" state on the next backend switch.
     await _platform.deleteBlob(
       id: id,
-      deleteFromCloud: _syncEnabled,
+      deleteFromCloud: true,
     );
     // Best-practice: a deleteKey often signals a security-relevant action
     // (rotating the wallet, signing out of an account). Drop the cached PIN
